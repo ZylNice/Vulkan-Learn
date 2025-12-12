@@ -5,7 +5,7 @@ project (VulkanTutorial)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/CMake")
 
 # Add option to enable/disable C++ 20 module
-option(ENABLE_CPP20_MODULE "Enable C++ 20 module support for Vulkan" ON)
+option(ENABLE_CPP20_MODULE "Enable C++ 20 module support for Vulkan" OFF)
 
 # Enable C++ module dependency scanning only if C++ 20 module is enabled
 if(ENABLE_CPP20_MODULE)
