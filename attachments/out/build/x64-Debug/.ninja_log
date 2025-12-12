@@ -1,0 +1,21 @@
+# ninja log v6
+42	337	7871293929550456	CMakeFiles/00_base_code.dir/00_base_code.cpp.obj.ddi	16a6ddbd4c8d1f04
+343	384	7871293932908048	CMakeFiles/00_base_code.dir/CXX.dd	6e30b599f7808573
+343	384	7871293932908048	CMakeFiles/00_base_code.dir/CXXModules.json	6e30b599f7808573
+343	384	7871293932908048	CMakeFiles/00_base_code.dir/00_base_code.cpp.obj.modmap	6e30b599f7808573
+385	4177	7871293932908048	CMakeFiles/00_base_code.dir/00_base_code.cpp.obj	90e6ecd316e3cb60
+4177	5745	7871293970928703	00_base_code/00_base_code.exe	d07da90e4b0385e7
+34	84	7872110718416427	15_hello_triangle/shaders	d4b6b10ca02d4c24
+34	84	7872110718416427	C:/Project/Vulkan/Vulkan-Learn/attachments/out/build/x64-Debug/15_hello_triangle/shaders	d4b6b10ca02d4c24
+84	193	7872110719585112	15_hello_triangle/shaders/frag.spv	27c13c529f565239
+84	193	7872110719585112	15_hello_triangle/shaders/vert.spv	27c13c529f565239
+84	193	7872110719585112	C:/Project/Vulkan/Vulkan-Learn/attachments/out/build/x64-Debug/15_hello_triangle/shaders/frag.spv	27c13c529f565239
+84	193	7872110719585112	C:/Project/Vulkan/Vulkan-Learn/attachments/out/build/x64-Debug/15_hello_triangle/shaders/vert.spv	27c13c529f565239
+88	313	7872110720749880	15_hello_triangle/shaders/slang.spv	1d6e502c26729694
+88	313	7872110720749880	C:/Project/Vulkan/Vulkan-Learn/attachments/out/build/x64-Debug/15_hello_triangle/shaders/slang.spv	1d6e502c26729694
+313	624	7872110720918060	CMakeFiles/15_hello_triangle.dir/15_hello_triangle.cpp.obj.ddi	4f7fbb6dfd8c2f8c
+638	695	7872110724522274	CMakeFiles/15_hello_triangle.dir/CXX.dd	4aec4c0d3612b2df
+638	695	7872110724522274	CMakeFiles/15_hello_triangle.dir/CXXModules.json	4aec4c0d3612b2df
+638	695	7872110724522274	CMakeFiles/15_hello_triangle.dir/15_hello_triangle.cpp.obj.modmap	4aec4c0d3612b2df
+695	3916	7872110724751506	CMakeFiles/15_hello_triangle.dir/15_hello_triangle.cpp.obj	63ba43867f970
+3916	4690	7872110756924799	15_hello_triangle/15_hello_triangle.exe	d777938c7a3a469d

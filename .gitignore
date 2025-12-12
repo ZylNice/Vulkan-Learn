@@ -1,72 +1,36 @@
-# ===========================
-# 1. Visual Studio 核心 (C++/Vulkan 必备)
-# ===========================
-.vs/
-[Oo]bj/
-[Bb]in/
-[Dd]ebug/
-[Rr]elease/
-x64/
-x86/
-build/
-*.suo
-*.user
-*.pdb
-*.ilk
-*.aps
-
-# ===========================
-# 2. 系统文件
-# ===========================
-.DS_Store
-Thumbs.db
-
-# ===========================
-# 3. VS Code
-# ===========================
-.vscode/
-
-# ===========================
-# 4. 电子书构建产物 (文档)
-# ===========================
 *.html
 ads.txt
+
+.vs/
+**/.vs/
+**/obj/
+**/bin/
+**/_out/*
+**/.vscode/*
+.DS_Store
 build_ebook.log
 temp_ebook.md
 ebook/*.pdf
 ebook/*.epub
-**/_out/*
 
-# ===========================
-# 5. Android (通用)
-# ===========================
-# 忽略 Gradle 构建缓存和 IDE 配置
-.gradle/
-build/
-.idea/
-.cxx/
+convert.py
+
+attachments/build/**
+attachments/android/.gradle/**
+attachments/android/.idea
+attachments/android/.gradle/**
+attachments/android/app/.cxx/**
+attachments/android/app/build/**
 local.properties
-*.iml
 
-# 保留 Gradle Wrapper (建议保留，确保构建环境一致)
-!gradle/wrapper/gradle-wrapper.jar
-!gradle/wrapper/gradle-wrapper.properties
-
-# ===========================
-# 6. 特定子项目路径 (attachments)
-# ===========================
-
-# --- Android 示例 ---
-attachments/android/app/build/
-attachments/android/app/.cxx/
-
-# --- Simple Engine ---
-attachments/simple_engine/build/
-attachments/simple_engine/android/.gradle/
-attachments/simple_engine/android/.idea/
-attachments/simple_engine/android/app/.cxx/
-attachments/simple_engine/android/app/build/
-
-# !警告!：如果你确认 Assets 是源码/素材，请删除下面这行
-# attachments/simple_engine/Assets/** # 如果 convert.py 是公共工具，建议保留；如果是私人脚本，则保持忽略
-# convert.py
+attachments/simple_engine/build/**
+attachments/simple_engine/Assets/**
+attachments/simple_engine/android/.gradle/**
+attachments/simple_engine/android/.idea
+attachments/simple_engine/android/.gradle/**
+attachments/simple_engine/android/app/.cxx/**
+attachments/simple_engine/android/app/build/**
+attachments/simple_engine/android/app/build/**
+attachments/simple_engine/android/gradle/wrapper/**
+attachments/simple_engine/android/gradlew
+attachments/simple_engine/android/gradlew.bat

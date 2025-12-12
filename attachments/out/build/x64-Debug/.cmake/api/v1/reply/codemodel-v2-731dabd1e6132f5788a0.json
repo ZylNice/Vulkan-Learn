@@ -1,0 +1,888 @@
+{
+	"configurations" : 
+	[
+		{
+			"directories" : 
+			[
+				{
+					"build" : ".",
+					"jsonFile" : "directory-.-Debug-d0094a50bb2071803777.json",
+					"minimumCMakeVersion" : 
+					{
+						"string" : "3.29"
+					},
+					"projectIndex" : 0,
+					"source" : ".",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3,
+						4,
+						5,
+						6,
+						7,
+						8,
+						9,
+						10,
+						11,
+						12,
+						13,
+						14,
+						15,
+						16,
+						17,
+						18,
+						19,
+						20,
+						21,
+						22,
+						23,
+						24,
+						25,
+						26,
+						27,
+						28,
+						29,
+						30,
+						31,
+						32,
+						33,
+						34,
+						35,
+						36,
+						37,
+						38,
+						39,
+						40,
+						41,
+						42,
+						43,
+						44,
+						45,
+						46,
+						47,
+						48,
+						49,
+						50,
+						51,
+						52,
+						53,
+						54,
+						55,
+						56,
+						57,
+						58,
+						59,
+						60,
+						61,
+						62,
+						63,
+						64,
+						65,
+						66,
+						67,
+						68,
+						69,
+						70,
+						71,
+						72,
+						73,
+						74,
+						75,
+						76,
+						77,
+						78,
+						79,
+						80,
+						81,
+						82,
+						83,
+						84,
+						85,
+						86,
+						87,
+						88,
+						89,
+						90,
+						91,
+						92
+					]
+				}
+			],
+			"name" : "Debug",
+			"projects" : 
+			[
+				{
+					"directoryIndexes" : 
+					[
+						0
+					],
+					"name" : "VulkanTutorial",
+					"targetIndexes" : 
+					[
+						0,
+						1,
+						2,
+						3,
+						4,
+						5,
+						6,
+						7,
+						8,
+						9,
+						10,
+						11,
+						12,
+						13,
+						14,
+						15,
+						16,
+						17,
+						18,
+						19,
+						20,
+						21,
+						22,
+						23,
+						24,
+						25,
+						26,
+						27,
+						28,
+						29,
+						30,
+						31,
+						32,
+						33,
+						34,
+						35,
+						36,
+						37,
+						38,
+						39,
+						40,
+						41,
+						42,
+						43,
+						44,
+						45,
+						46,
+						47,
+						48,
+						49,
+						50,
+						51,
+						52,
+						53,
+						54,
+						55,
+						56,
+						57,
+						58,
+						59,
+						60,
+						61,
+						62,
+						63,
+						64,
+						65,
+						66,
+						67,
+						68,
+						69,
+						70,
+						71,
+						72,
+						73,
+						74,
+						75,
+						76,
+						77,
+						78,
+						79,
+						80,
+						81,
+						82,
+						83,
+						84,
+						85,
+						86,
+						87,
+						88,
+						89,
+						90,
+						91,
+						92
+					]
+				}
+			],
+			"targets" : 
+			[
+				{
+					"directoryIndex" : 0,
+					"id" : "00_base_code::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-00_base_code-Debug-14cb7875c9356568ef62.json",
+					"name" : "00_base_code",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "01_instance_creation::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-01_instance_creation-Debug-42757475a2dfe0afb221.json",
+					"name" : "01_instance_creation",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "02_validation_layers::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-02_validation_layers-Debug-76705f1291263480d957.json",
+					"name" : "02_validation_layers",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "03_physical_device_selection::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-03_physical_device_selection-Debug-8131c9c6222294fe614c.json",
+					"name" : "03_physical_device_selection",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "04_logical_device::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-04_logical_device-Debug-30e8689d5551aea31e45.json",
+					"name" : "04_logical_device",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "05_window_surface::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-05_window_surface-Debug-4837b8e7f7523dce785a.json",
+					"name" : "05_window_surface",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "06_swap_chain_creation::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-06_swap_chain_creation-Debug-ef47847f2f2ba56799b1.json",
+					"name" : "06_swap_chain_creation",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "07_image_views::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-07_image_views-Debug-624b0706abab374c7bae.json",
+					"name" : "07_image_views",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "08_graphics_pipeline::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-08_graphics_pipeline-Debug-f202f9eea762b3e8cb4e.json",
+					"name" : "08_graphics_pipeline",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "09_shader_modules::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-09_shader_modules-Debug-5010e6c906666fbf7002.json",
+					"name" : "09_shader_modules",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "09_shader_modules_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-09_shader_modules_shader-Debug-866698700ec8c249d81a.json",
+					"name" : "09_shader_modules_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "09_shader_modules_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-09_shader_modules_slang_shader-Debug-93774a7ea345fc551783.json",
+					"name" : "09_shader_modules_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "10_fixed_functions::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-10_fixed_functions-Debug-c551bfbf7c383a819081.json",
+					"name" : "10_fixed_functions",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "10_fixed_functions_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-10_fixed_functions_shader-Debug-8e7ea9993c976891ecb4.json",
+					"name" : "10_fixed_functions_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "10_fixed_functions_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-10_fixed_functions_slang_shader-Debug-d0099673426cce459979.json",
+					"name" : "10_fixed_functions_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "12_graphics_pipeline_complete::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-12_graphics_pipeline_complete-Debug-2719d14f65557e0b88c0.json",
+					"name" : "12_graphics_pipeline_complete",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "12_graphics_pipeline_complete_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-12_graphics_pipeline_complete_shader-Debug-b8daaf998a62650d8ac1.json",
+					"name" : "12_graphics_pipeline_complete_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "12_graphics_pipeline_complete_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-12_graphics_pipeline_complete_slang_shader-Debug-039df4e1d7a6cd8510ff.json",
+					"name" : "12_graphics_pipeline_complete_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "14_command_buffers::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-14_command_buffers-Debug-b1c35e2a7f5aef68c8ea.json",
+					"name" : "14_command_buffers",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "14_command_buffers_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-14_command_buffers_shader-Debug-9847f32c799fb1299fe0.json",
+					"name" : "14_command_buffers_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "14_command_buffers_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-14_command_buffers_slang_shader-Debug-4747f3f6bceaa93375d0.json",
+					"name" : "14_command_buffers_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "15_hello_triangle::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-15_hello_triangle-Debug-1f754a7bc7e6a0315dcc.json",
+					"name" : "15_hello_triangle",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "15_hello_triangle_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-15_hello_triangle_shader-Debug-3c7b8e61b725412965da.json",
+					"name" : "15_hello_triangle_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "15_hello_triangle_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-15_hello_triangle_slang_shader-Debug-af0069accb403063a66d.json",
+					"name" : "15_hello_triangle_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "16_frames_in_flight::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-16_frames_in_flight-Debug-0dc47ac44d7eae92721b.json",
+					"name" : "16_frames_in_flight",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "16_frames_in_flight_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-16_frames_in_flight_shader-Debug-db49d7a62322aedbd21f.json",
+					"name" : "16_frames_in_flight_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "16_frames_in_flight_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-16_frames_in_flight_slang_shader-Debug-160288782237b0b0de05.json",
+					"name" : "16_frames_in_flight_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "17_swap_chain_recreation::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-17_swap_chain_recreation-Debug-a9631fa1a0cae1e7fb33.json",
+					"name" : "17_swap_chain_recreation",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "17_swap_chain_recreation_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-17_swap_chain_recreation_shader-Debug-2cbe13447b1d6f75e56c.json",
+					"name" : "17_swap_chain_recreation_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "17_swap_chain_recreation_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-17_swap_chain_recreation_slang_shader-Debug-8b83c6af7916b0095575.json",
+					"name" : "17_swap_chain_recreation_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "18_vertex_input::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-18_vertex_input-Debug-176320bb8ca1c0a5c66e.json",
+					"name" : "18_vertex_input",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "18_vertex_input_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-18_vertex_input_shader-Debug-ad7f1e319e8a313a0eac.json",
+					"name" : "18_vertex_input_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "18_vertex_input_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-18_vertex_input_slang_shader-Debug-c80d51815ed176c9c2e9.json",
+					"name" : "18_vertex_input_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "19_vertex_buffer::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-19_vertex_buffer-Debug-0cf158d26345b8fe8e63.json",
+					"name" : "19_vertex_buffer",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "19_vertex_buffer_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-19_vertex_buffer_shader-Debug-ac612533bd06d436440d.json",
+					"name" : "19_vertex_buffer_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "19_vertex_buffer_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-19_vertex_buffer_slang_shader-Debug-9113d429de462d3ae471.json",
+					"name" : "19_vertex_buffer_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "20_staging_buffer::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-20_staging_buffer-Debug-3fc813072f0589e2e49a.json",
+					"name" : "20_staging_buffer",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "20_staging_buffer_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-20_staging_buffer_shader-Debug-bcd9e0b70af8d375c9f0.json",
+					"name" : "20_staging_buffer_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "20_staging_buffer_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-20_staging_buffer_slang_shader-Debug-1a5a9dca1fff851a8f4c.json",
+					"name" : "20_staging_buffer_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "21_index_buffer::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-21_index_buffer-Debug-ea6e447bd3bba71dbe1f.json",
+					"name" : "21_index_buffer",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "21_index_buffer_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-21_index_buffer_shader-Debug-6537e4ee01961ea42d5c.json",
+					"name" : "21_index_buffer_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "21_index_buffer_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-21_index_buffer_slang_shader-Debug-bd7074ff1a3def3fb904.json",
+					"name" : "21_index_buffer_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "22_descriptor_layout::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-22_descriptor_layout-Debug-697af8486bbb30accb46.json",
+					"name" : "22_descriptor_layout",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "22_descriptor_layout_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-22_descriptor_layout_shader-Debug-6bc0630b6c14058cdb0c.json",
+					"name" : "22_descriptor_layout_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "22_descriptor_layout_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-22_descriptor_layout_slang_shader-Debug-b2f51e543c040bb0e479.json",
+					"name" : "22_descriptor_layout_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "23_descriptor_sets::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-23_descriptor_sets-Debug-9e0b379f0b37afeb820b.json",
+					"name" : "23_descriptor_sets",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "23_descriptor_sets_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-23_descriptor_sets_shader-Debug-3586d0d3ab2968fba79a.json",
+					"name" : "23_descriptor_sets_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "23_descriptor_sets_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-23_descriptor_sets_slang_shader-Debug-b4fd2f00b60aec06c80d.json",
+					"name" : "23_descriptor_sets_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "24_texture_image::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-24_texture_image-Debug-299ff9405c85dc77dc23.json",
+					"name" : "24_texture_image",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "24_texture_image_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-24_texture_image_shader-Debug-e395f1ded39a54b4d07c.json",
+					"name" : "24_texture_image_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "24_texture_image_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-24_texture_image_slang_shader-Debug-98567a7ddaf8a2785cba.json",
+					"name" : "24_texture_image_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "25_sampler::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-25_sampler-Debug-e2e84cdf9d0ba7a29283.json",
+					"name" : "25_sampler",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "25_sampler_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-25_sampler_shader-Debug-8939c3bf69cd4dd252ed.json",
+					"name" : "25_sampler_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "25_sampler_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-25_sampler_slang_shader-Debug-e3dd06e75c84f1f0d020.json",
+					"name" : "25_sampler_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "26_texture_mapping::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-26_texture_mapping-Debug-b711dc9be57ba6b26175.json",
+					"name" : "26_texture_mapping",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "26_texture_mapping_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-26_texture_mapping_shader-Debug-51f4bf56b314fe71bbd6.json",
+					"name" : "26_texture_mapping_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "26_texture_mapping_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-26_texture_mapping_slang_shader-Debug-be5208be056385b98a12.json",
+					"name" : "26_texture_mapping_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "27_depth_buffering::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-27_depth_buffering-Debug-d5e7018a7de6c35c2d31.json",
+					"name" : "27_depth_buffering",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "27_depth_buffering_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-27_depth_buffering_shader-Debug-072dbe1341acaa95977e.json",
+					"name" : "27_depth_buffering_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "27_depth_buffering_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-27_depth_buffering_slang_shader-Debug-f456d891f9684e70fe5a.json",
+					"name" : "27_depth_buffering_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "28_model_loading::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-28_model_loading-Debug-832fe346fa9eee23c185.json",
+					"name" : "28_model_loading",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "28_model_loading_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-28_model_loading_shader-Debug-e8100a7f003058ac62e9.json",
+					"name" : "28_model_loading_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "28_model_loading_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-28_model_loading_slang_shader-Debug-739331a5da2e6fe91a78.json",
+					"name" : "28_model_loading_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "29_mipmapping::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-29_mipmapping-Debug-41c865ccf89505e65f44.json",
+					"name" : "29_mipmapping",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "29_mipmapping_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-29_mipmapping_shader-Debug-27591c8055a43b692c74.json",
+					"name" : "29_mipmapping_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "29_mipmapping_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-29_mipmapping_slang_shader-Debug-8bd0ac504a36cb8b4c3e.json",
+					"name" : "29_mipmapping_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "30_multisampling::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-30_multisampling-Debug-ec87804178ff92da949b.json",
+					"name" : "30_multisampling",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "30_multisampling_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-30_multisampling_shader-Debug-5815b51d59da4ccde56c.json",
+					"name" : "30_multisampling_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "30_multisampling_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-30_multisampling_slang_shader-Debug-13d6f2ce667296182091.json",
+					"name" : "30_multisampling_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "31_compute_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-31_compute_shader-Debug-8c81e434b281b39a5f94.json",
+					"name" : "31_compute_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "31_compute_shader_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-31_compute_shader_shader-Debug-c3d84b0cde3eae9ed8c1.json",
+					"name" : "31_compute_shader_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "31_compute_shader_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-31_compute_shader_slang_shader-Debug-a80663298e15feb4f2d1.json",
+					"name" : "31_compute_shader_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "32_ecosystem_utilities::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-32_ecosystem_utilities-Debug-f0a71b6648c45c292648.json",
+					"name" : "32_ecosystem_utilities",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "32_ecosystem_utilities_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-32_ecosystem_utilities_shader-Debug-10fc60c451ded063ff5b.json",
+					"name" : "32_ecosystem_utilities_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "32_ecosystem_utilities_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-32_ecosystem_utilities_slang_shader-Debug-bffc4b99c99795a9e32e.json",
+					"name" : "32_ecosystem_utilities_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "33_vulkan_profiles::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-33_vulkan_profiles-Debug-dd9cdcff384304302ecb.json",
+					"name" : "33_vulkan_profiles",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "33_vulkan_profiles_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-33_vulkan_profiles_shader-Debug-7ebeccd1cd80b1506078.json",
+					"name" : "33_vulkan_profiles_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "33_vulkan_profiles_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-33_vulkan_profiles_slang_shader-Debug-c8e6db59ce91c754c9b0.json",
+					"name" : "33_vulkan_profiles_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "34_android::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-34_android-Debug-6d6a9d029e78fbb8b8f3.json",
+					"name" : "34_android",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "34_android_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-34_android_shader-Debug-bead9de59446b2841c5f.json",
+					"name" : "34_android_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "34_android_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-34_android_slang_shader-Debug-8d187f722e98ddfa6e46.json",
+					"name" : "34_android_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "35_gltf_ktx::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-35_gltf_ktx-Debug-3537b2be7123ba6667cf.json",
+					"name" : "35_gltf_ktx",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "35_gltf_ktx_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-35_gltf_ktx_shader-Debug-522edb0ba0457a98d3c8.json",
+					"name" : "35_gltf_ktx_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "35_gltf_ktx_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-35_gltf_ktx_slang_shader-Debug-a6b11a67a9d9187c4182.json",
+					"name" : "35_gltf_ktx_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "36_multiple_objects::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-36_multiple_objects-Debug-9955249c1235e0629e04.json",
+					"name" : "36_multiple_objects",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "36_multiple_objects_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-36_multiple_objects_shader-Debug-61123dfbc0df02cb5427.json",
+					"name" : "36_multiple_objects_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "36_multiple_objects_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-36_multiple_objects_slang_shader-Debug-6e8ce2d9c784adae087a.json",
+					"name" : "36_multiple_objects_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "37_multithreading::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-37_multithreading-Debug-504632c94646ca5e7a39.json",
+					"name" : "37_multithreading",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "37_multithreading_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-37_multithreading_shader-Debug-fa403d0d31c0c9a7c9c4.json",
+					"name" : "37_multithreading_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "37_multithreading_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-37_multithreading_slang_shader-Debug-5c03476eb57469ffd0c7.json",
+					"name" : "37_multithreading_slang_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "38_ray_tracing::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-38_ray_tracing-Debug-c53d97b359163f7dee25.json",
+					"name" : "38_ray_tracing",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "38_ray_tracing_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-38_ray_tracing_shader-Debug-89899124a5a3a4e1bf7f.json",
+					"name" : "38_ray_tracing_shader",
+					"projectIndex" : 0
+				},
+				{
+					"directoryIndex" : 0,
+					"id" : "38_ray_tracing_slang_shader::@6890427a1f51a3e7e1df",
+					"jsonFile" : "target-38_ray_tracing_slang_shader-Debug-bb6a2898a60ffb9e29c8.json",
+					"name" : "38_ray_tracing_slang_shader",
+					"projectIndex" : 0
+				}
+			]
+		}
+	],
+	"kind" : "codemodel",
+	"paths" : 
+	{
+		"build" : "C:/Project/Vulkan/Vulkan-Learn/attachments/out/build/x64-Debug",
+		"source" : "C:/Project/Vulkan/Vulkan-Learn/attachments"
+	},
+	"version" : 
+	{
+		"major" : 2,
+		"minor" : 8
+	}
+}

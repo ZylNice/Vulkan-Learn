@@ -1,0 +1,14 @@
+{
+    "version": 1,
+    "revision": 0,
+    "rules": [
+        {
+            "primary-output": "CMakeFiles\\15_hello_triangle.dir\\15_hello_triangle.cpp.obj",
+            "outputs": [
+                "C:\\Project\\Vulkan\\Vulkan-Learn\\attachments\\out\\build\\x64-Debug\\vc140.pdb",
+                "CMakeFiles\\15_hello_triangle.dir\\15_hello_triangle.cpp.obj.ddi"
+            ],
+            "requires": []
+        }
+    ]
+}
