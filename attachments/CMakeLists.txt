@@ -5,7 +5,7 @@ project (VulkanTutorial)
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/CMake")
 
 # Add option to enable/disable C++ 20 module
-option(ENABLE_CPP20_MODULE "Enable C++ 20 module support for Vulkan" OFF)
+option(ENABLE_CPP20_MODULE "Enable C++ 20 module support for Vulkan" ON)
 
 # Enable C++ module dependency scanning only if C++ 20 module is enabled
 if(ENABLE_CPP20_MODULE)
@@ -17,7 +17,7 @@ find_package (glm REQUIRED)
 find_package (Vulkan REQUIRED)
 find_package (tinyobjloader REQUIRED)
 find_package (tinygltf REQUIRED)
-find_package (KTX REQUIRED)
+# find_package (KTX REQUIRED)
 
 # set up Vulkan C++ module only if enabled
 if(ENABLE_CPP20_MODULE)
@@ -298,13 +298,15 @@ add_chapter (35_gltf_ktx
   SHADER 27_shader_depth
   MODELS viking_room.glb
   TEXTURES viking_room.ktx2
-  LIBS glm::glm tinygltf::tinygltf KTX::ktx)
+  # LIBS glm::glm tinygltf::tinygltf KTX::ktx
+)
 
 add_chapter (36_multiple_objects
   SHADER 27_shader_depth
   MODELS viking_room.glb
   TEXTURES viking_room.ktx2
-  LIBS glm::glm tinygltf::tinygltf KTX::ktx)
+  # LIBS glm::glm tinygltf::tinygltf KTX::ktx
+)
 
 add_chapter (37_multithreading
   SHADER 37_shader_compute
