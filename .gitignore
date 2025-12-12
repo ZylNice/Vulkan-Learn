@@ -2,6 +2,7 @@
 ads.txt
 
 .vs/
+out/
 **/.vs/
 **/obj/
 **/bin/
