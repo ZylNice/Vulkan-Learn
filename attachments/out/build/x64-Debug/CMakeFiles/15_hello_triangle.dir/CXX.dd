@@ -1,3 +1,0 @@
-ninja_dyndep_version = 1.0
-build CMakeFiles\15_hello_triangle.dir\15_hello_triangle.cpp.obj: dyndep
-

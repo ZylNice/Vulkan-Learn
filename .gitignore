@@ -3,7 +3,6 @@ ads.txt
 
 .vs/
 out/
-**/.vs/
 **/obj/
 **/bin/
 **/_out/*
