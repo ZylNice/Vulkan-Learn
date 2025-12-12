@@ -1,0 +1,97 @@
+:pp: {plus}{plus}
+
+= Conclusion
+
+We can now combine all the structures and objects from the previous chapters to create the graphics pipeline!
+Here are the types of objects we have now, as a quick recap:
+
+* Shader stages: the shader modules that define the functionality of the programmable stages of the graphics pipeline
+* Fixed-function state: all the structures that define the fixed-function stages of the pipeline, like input assembly, rasterizer, viewport and color blending
+* Pipeline layout: the uniform and push values referenced by the shader that can be updated at draw time
+* Dynamic rendering: the formats of the attachments that will be used during rendering
+
+All of these combined fully define the functionality of the graphics pipeline, so we can now begin filling in the `VkGraphicsPipelineCreateInfo` structure at the end of the `createGraphicsPipeline` function.
+But before the calls to  `vkDestroyShaderModule` because these are still to be used during the creation.
+
+[,c++]
+----
+vk::GraphicsPipelineCreateInfo pipelineInfo({}, 2, shaderStages);
+----
+
+We start by referencing the array of `VkPipelineShaderStageCreateInfo` structs.
+
+[,c++]
+----
+vk::GraphicsPipelineCreateInfo pipelineInfo({}, 2, shaderStages, &vertexInputInfo, &inputAssembly, {}, &viewportState, &rasterizer, &multisampling, {}, &colorBlending,
+            &dynamicState);
+----
+
+Then we reference all the structures describing the fixed-function stage.
+
+[,c++]
+----
+vk::GraphicsPipelineCreateInfo pipelineInfo({}, 2, shaderStages, &vertexInputInfo, &inputAssembly, {}, &viewportState, &rasterizer, &multisampling, {}, &colorBlending,
+            &dynamicState, *pipelineLayout);
+----
+
+After that comes the pipeline layout, which is a Vulkan handle rather than a struct pointer.
+
+[,c++]
+----
+vk::PipelineRenderingCreateInfo pipelineRenderingCreateInfo{ .colorAttachmentCount = 1, .pColorAttachmentFormats = &swapChainImageFormat };
+vk::GraphicsPipelineCreateInfo pipelineInfo{ .pNext = &pipelineRenderingCreateInfo,
+    .stageCount = 2, .pStages = shaderStages,
+    .pVertexInputState = &vertexInputInfo, .pInputAssemblyState = &inputAssembly,
+    .pViewportState = &viewportState, .pRasterizationState = &rasterizer,
+    .pMultisampleState = &multisampling, .pColorBlendState = &colorBlending,
+    .pDynamicState = &dynamicState, .layout = pipelineLayout, .renderPass = nullptr };
+----
+
+Note that we're using dynamic rendering instead of a traditional render pass, so we set the `renderPass` parameter to `nullptr` and include a `vk::PipelineRenderingCreateInfo` structure in the `pNext` chain. This structure specifies the formats of the attachments that will be used during rendering.
+
+[,c++]
+----
+pipelineInfo.basePipelineHandle = VK_NULL_HANDLE; // Optional
+pipelineInfo.basePipelineIndex = -1; // Optional
+----
+
+There are actually two more parameters: `basePipelineHandle` and `basePipelineIndex`.
+Vulkan allows you to create a new graphics pipeline by deriving from an existing pipeline.
+The idea of pipeline derivatives is that it is less expensive to set up pipelines when they have much functionality in common with an existing pipeline and switching between pipelines from the same parent can also be done quicker.
+You can either specify the handle of an existing pipeline with `basePipelineHandle` or reference another pipeline that is about to be created by index with `basePipelineIndex`.
+Right now there is only a single pipeline, so we'll simply specify a null handle and an invalid index.
+These values are only used if the `VK_PIPELINE_CREATE_DERIVATIVE_BIT` flag is also specified in the `flags` field of `VkGraphicsPipelineCreateInfo`.
+
+Now prepare for the final step by creating a class member to hold the `VkPipeline` object:
+
+[,c++]
+----
+vk::raii::Pipeline graphicsPipeline = nullptr;
+----
+
+And finally, create the graphics pipeline:
+
+[,c++]
+----
+graphicsPipeline = vk::raii::Pipeline(device, nullptr, pipelineInfo);
+----
+
+The `vkCreateGraphicsPipelines` function actually has more parameters than the usual object creation functions in Vulkan.
+It is designed to take multiple `VkGraphicsPipelineCreateInfo` objects and create multiple `VkPipeline` objects in a single call.
+
+The second parameter, for which we've passed the `VK_NULL_HANDLE` argument, references an optional `VkPipelineCache` object.
+A pipeline cache can be used to store and reuse data relevant to pipeline creation across multiple calls to `vkCreateGraphicsPipelines` and even across program executions if the cache is stored to a file.
+This makes it possible to significantly speed up pipeline creation at a later time.
+We'll get into this in the pipeline cache chapter.
+
+The graphics pipeline is required for all common drawing operations.
+
+Now run your program to confirm that all this hard work has resulted in a successful pipeline creation!
+We are already getting quite close to seeing something pop up on the screen.
+In the xref:/03_Drawing_a_triangle/03_Drawing/00_Framebuffers.adoc[next couple of chapters,]
+we'll set up the actual framebuffers from the swap chain images and prepare the drawing commands.
+
+link:/attachments/12_graphics_pipeline_complete.cpp[C{pp} code] /
+link:/attachments/09_shader_base.slang[Slang shader] /
+link:/attachments/09_shader_base.vert[GLSL Vertex shader] /
+link:/attachments/09_shader_base.frag[GLSL Fragment shader]

@@ -1,0 +1,240 @@
+:pp: {plus}{plus}
+
+= Physical devices and queue families
+
+== Selecting a physical device
+
+After initializing the Vulkan library through a VkInstance we need to look for
+and select a graphics card in the system that supports the features we need. In
+fact, we can select any number of graphics cards and use them simultaneously, but
+in this tutorial we'll stick to the first graphics card that suits our needs.
+
+We'll add a function `pickPhysicalDevice` and add a call to it in the
+`initVulkan` function.
+
+[,c++]
+----
+void initVulkan() {
+    createInstance();
+    setupDebugMessenger();
+    pickPhysicalDevice();
+}
+
+void pickPhysicalDevice() {
+
+}
+----
+
+The graphics card that we'll end up selecting will be stored in a
+VkPhysicalDevice handle added as a new class member.
+
+[,c++]
+----
+vk::raii::PhysicalDevice physicalDevice = nullptr;
+----
+
+Listing the graphics cards is very similar to listing extensions and starts with
+querying just the number.
+
+[,c++]
+----
+auto devices = instance.enumeratePhysicalDevices()
+----
+
+If there are no devices with Vulkan support, then there is no point going
+further.
+
+[,c++]
+----
+if (devices.empty()) {
+    throw std::runtime_error("failed to find GPUs with Vulkan support!");
+}
+----
+
+Now we need to evaluate each of them and check if they are suitable for the
+operations we want to perform, because not all graphics cards are created equal.
+We'll check if any of the physical devices meet the requirements that we'll
+add to that function.
+
+[,c++]
+----
+for (const auto& device : devices) {
+    physicalDevice = device;
+    break;
+}
+----
+
+== Base device suitability checks
+
+To evaluate the suitability of a device, we can start by querying for some
+details. Basic device properties like the name, type and supported Vulkan
+version can be queried using vkGetPhysicalDeviceProperties.
+
+[,c++]
+----
+auto deviceProperties = device.getProperties();
+----
+
+The support for optional features like texture compression, 64-bit floats and
+multi viewport rendering (useful for VR) can be queried using
+vkGetPhysicalDeviceFeatures:
+
+[,c++]
+----
+auto deviceFeatures = device.getFeatures();
+----
+
+There are more details that can be queried from devices that we'll discuss later
+concerning device memory and queue families (see the next section).
+
+As an example, let's say we consider our application only usable for dedicated
+graphics cards that support geometry shaders. Then the `isDeviceSuitable`
+function would look like this:
+
+[,c++]
+----
+bool isDeviceSuitable(vk::raii::PhysicalDevice physicalDevice) {
+    auto deviceProperties = physicalDevice.getProperties();
+    auto deviceFeatures = physicalDevice.getFeatures();
+
+    if (deviceProperties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu && deviceFeatures.geometryShader) {
+        return true;
+    }
+
+    return false;
+}
+----
+
+Instead of just checking if a device is suitable or not and going with the first
+one, you could also give each device a score and pick the highest one. That way
+you could favor a dedicated graphics card by giving it a higher score, but fall
+back to an integrated GPU if that's the only available one. You could implement
+something like that as follows:
+
+[,c++]
+----
+#include <map>
+
+...
+
+void pickPhysicalDevice() {
+    auto devices = vk::raii::PhysicalDevices( instance );
+    if (devices.empty()) {
+        throw std::runtime_error( "failed to find GPUs with Vulkan support!" );
+    }
+    // Use an ordered map to automatically sort candidates by increasing score
+    std::multimap<int, vk::raii::PhysicalDevice> candidates;
+
+    for (const auto& device : devices) {
+        auto deviceProperties = device.getProperties();
+        auto deviceFeatures = device.getFeatures();
+        uint32_t score = 0;
+
+        // Discrete GPUs have a significant performance advantage
+        if (deviceProperties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu) {
+            score += 1000;
+        }
+
+        // Maximum possible size of textures affects graphics quality
+        score += deviceProperties.limits.maxImageDimension2D;
+
+        // Application can't function without geometry shaders
+        if (!deviceFeatures.geometryShader) {
+           continue;
+        }
+        candidates.insert(std::make_pair(score, device));
+    }
+
+    // Check if the best candidate is suitable at all
+    if (candidates.rbegin()->first > 0) {
+        physicalDevice = candidates.rbegin()->second;
+    } else {
+        throw std::runtime_error("failed to find a suitable GPU!");
+    }
+}
+----
+
+You don't need to implement all that for this tutorial, but it's to give you an
+idea of how you could design your device selection process. Of course, you can
+also display the names of the choices and allow the user to select.
+
+Because we're just starting out, Vulkan 1.3 support is the only thing we need,
+ and therefore we'll search for that and the extensions that we actually are
+ going to be demonstrating:
+
+[,c++]
+----
+std::vector<const char*> deviceExtensions = {
+    vk::KHRSwapchainExtensionName,
+    vk::KHRSpirv14ExtensionName,
+    vk::KHRSynchronization2ExtensionName,
+    vk::KHRCreateRenderpass2ExtensionName
+};
+
+void pickPhysicalDevice() {
+    std::vector<vk::raii::PhysicalDevice> devices = instance.enumeratePhysicalDevices();
+    const auto devIter = std::ranges::find_if(devices,
+    [&](auto const & device) {
+            auto queueFamilies = device.getQueueFamilyProperties();
+            bool isSuitable = device.getProperties().apiVersion >= VK_API_VERSION_1_3;
+            const auto qfpIter = std::ranges::find_if(queueFamilies,
+            []( vk::QueueFamilyProperties const & qfp )
+                    {
+                        return (qfp.queueFlags & vk::QueueFlagBits::eGraphics) != static_cast<vk::QueueFlags>(0);
+                    } );
+            isSuitable = isSuitable && ( qfpIter != queueFamilies.end() );
+            auto extensions = device.enumerateDeviceExtensionProperties( );
+            bool found = true;
+            for (auto const & extension : deviceExtensions) {
+                auto extensionIter = std::ranges::find_if(extensions, [extension](auto const & ext) {return strcmp(ext.extensionName, extension) == 0;});
+                found = found &&  extensionIter != extensions.end();
+            }
+            isSuitable = isSuitable && found;
+            if (isSuitable) {
+                physicalDevice = device;
+            }
+            return isSuitable;
+    });
+    if (devIter == devices.end()) {
+        throw std::runtime_error("failed to find a suitable GPU!");
+    }
+}
+----
+
+In the next section, we'll discuss the first real required feature to check for.
+
+== Queue families
+
+It has been briefly touched upon before that almost every operation in Vulkan,
+anything from drawing to uploading textures, requires commands to be submitted
+to a queue. There are different types of queues that originate from different
+*queue families,* and each family of queues allows only a subset of commands. For
+example, there could be a queue family that only allows processing of compute
+commands or one that only allows memory transfer related commands.
+
+We need to check which queue families are supported by the device and which one
+of these supports the commands that we want to use. Right now we are only
+going to look for a queue that supports graphics commands, so the code
+could look like this:
+
+[,c++]
+----
+uint32_t findQueueFamilies(vk::raii::PhysicalDevice physicalDevice) {
+    // find the index of the first queue family that supports graphics
+    std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
+
+    // get the first index into queueFamilyProperties which supports graphics
+    auto graphicsQueueFamilyProperty =
+      std::find_if( queueFamilyProperties.begin(),
+                    queueFamilyProperties.end(),
+                    []( vk::QueueFamilyProperties const & qfp ) { return qfp.queueFlags & vk::QueueFlagBits::eGraphics; } );
+
+    return static_cast<uint32_t>( std::distance( queueFamilyProperties.begin(), graphicsQueueFamilyProperty ) );
+}
+----
+
+Great, that's all we need for now to find the right physical device! The next
+step is to xref:./04_Logical_device_and_queues.adoc[create a logical device]
+to interface with it.
+
+link:/attachments/03_physical_device_selection.cpp[C{pp} code]

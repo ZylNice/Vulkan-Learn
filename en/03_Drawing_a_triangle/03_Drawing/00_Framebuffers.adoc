@@ -1,0 +1,88 @@
+:pp: {plus}{plus}
+
+= Dynamic Rendering
+
+In previous versions of Vulkan, we would need to create framebuffers to bind our image views to a render pass. However, with the introduction of dynamic rendering in Vulkan 1.3, we can now render directly to image views without creating framebuffers or render passes.
+
+== Introduction to Dynamic Rendering
+
+Dynamic rendering simplifies the rendering process by eliminating the need for render pass and framebuffer objects. Instead, we can specify the color, depth, and stencil attachments directly when we begin rendering.
+
+This approach offers several advantages:
+- Simplified code with fewer objects to manage
+- More flexibility in changing attachments during rendering
+- Better compatibility with modern rendering techniques
+
+Let's see how this works in practice. We'll be using the `vk::RenderingAttachmentInfo` and `vk::RenderingInfo` structures to specify our attachments and rendering parameters.
+
+== Command Buffer Recording with Dynamic Rendering
+
+In the next chapter, we'll create command buffers and record rendering commands. Here's a preview of how we'll use dynamic rendering:
+
+[,c++]
+----
+void recordCommandBuffer(uint32_t imageIndex) {
+    commandBuffer.begin({});
+
+    // Transition the image layout for rendering
+    transition_image_layout(
+        imageIndex,
+        vk::ImageLayout::eUndefined,
+        vk::ImageLayout::eColorAttachmentOptimal,
+        {},
+        vk::AccessFlagBits2::eColorAttachmentWrite,
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput
+    );
+
+    // Set up the color attachment
+    vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+    vk::RenderingAttachmentInfo attachmentInfo = {
+        .imageView = swapChainImageViews[imageIndex],
+        .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+        .loadOp = vk::AttachmentLoadOp::eClear,
+        .storeOp = vk::AttachmentStoreOp::eStore,
+        .clearValue = clearColor
+    };
+
+    // Set up the rendering info
+    vk::RenderingInfo renderingInfo = {
+        .renderArea = { .offset = { 0, 0 }, .extent = swapChainExtent },
+        .layerCount = 1,
+        .colorAttachmentCount = 1,
+        .pColorAttachments = &attachmentInfo
+    };
+
+    // Begin rendering
+    commandBuffer.beginRendering(renderingInfo);
+
+    // Rendering commands will go here
+
+    // End rendering
+    commandBuffer.endRendering();
+
+    // Transition the image layout for presentation
+    transition_image_layout(
+        imageIndex,
+        vk::ImageLayout::eColorAttachmentOptimal,
+        vk::ImageLayout::ePresentSrcKHR,
+        vk::AccessFlagBits2::eColorAttachmentWrite,
+        {},
+        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+        vk::PipelineStageFlagBits2::eBottomOfPipe
+    );
+
+    commandBuffer.end();
+}
+----
+
+As you can see, we directly specify the image view to render to in the `vk::RenderingAttachmentInfo` structure. We also specify the load and store operations, similar to what we would do in a render pass. The `vk::RenderingInfo` structure then combines this with other rendering parameters.
+
+With this approach, we don't need to create framebuffers or render passes, which simplifies our code and gives us more flexibility.
+
+In the xref:./01_Command_buffers.adoc[next chapter,] we'll create command buffers and write the first actual drawing commands using dynamic rendering.
+
+link:/attachments/14_command_buffers.cpp[C{pp} code] /
+link:/attachments/09_shader_base.slang[Slang shader] /
+link:/attachments/09_shader_base.vert[GLSL Vertex shader] /
+link:/attachments/09_shader_base.frag[GLSL Fragment shader]
