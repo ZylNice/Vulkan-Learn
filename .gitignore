@@ -3,6 +3,7 @@ ads.txt
 
 .vs/
 out/
+vcpkg_installed/
 **/obj/
 **/bin/
 **/_out/*

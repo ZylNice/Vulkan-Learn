@@ -10,11 +10,18 @@
 import vulkan_hpp;
 #endif
 
-#define GLFW_INCLUDE_VULKAN // 导入 glfwCreateWindowSurface 函数（条件编译 glfw3.h）
+#define GLFW_INCLUDE_VULKAN        // 导入 glfwCreateWindowSurface 函数（条件编译 glfw3.h）
 #include <GLFW/glfw3.h>
 
 const uint32_t WIDTH  = 800;
 const uint32_t HEIGHT = 600;
+
+const std::vector<char const *> validationLayers = {"VK_LAYER_KHRONOS_validation"};
+#ifdef NDEBUG
+constexpr bool enableValidationLayers = false;        // 发布时关闭验证层，保证性能
+#else
+constexpr bool enableValidationLayers = true;
+#endif
 
 class HelloTriangleApplication
 {
@@ -33,6 +40,8 @@ class HelloTriangleApplication
 	vk::raii::Context  context;
 	vk::raii::Instance instance = nullptr;
 
+	vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
+
 	void initWindow()
 	{
 		glfwInit();        // 初始化 glfw 库
@@ -46,6 +55,7 @@ class HelloTriangleApplication
 	void initVulkan()
 	{
 		createInstance();
+		setupDebugMessenger();
 	}
 
 	void mainLoop()
@@ -76,7 +86,7 @@ class HelloTriangleApplication
 		auto     glfwExtensions     = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
 
 		auto extensionProperties = context.enumerateInstanceExtensionProperties();        // 查询显卡支持的所有 Vulkan 拓展
-		for (uint32_t i = 0; i < glfwExtensionCount; ++i) // 检查显卡是否支持 glfw 要开启的 Vulkan 拓展
+		for (uint32_t i = 0; i < glfwExtensionCount; ++i)                                 // 检查显卡是否支持 glfw 要开启的 Vulkan 拓展
 		{
 			if (std::ranges::none_of(extensionProperties,
 			                         [glfwExtension = glfwExtensions[i]](auto const &extensionProperty) { return strcmp(extensionProperty.extensionName, glfwExtension) == 0; }))
@@ -85,11 +95,21 @@ class HelloTriangleApplication
 			}
 		}
 
+		auto requiredExtensions = getRequireExtensions();
+
 		vk::InstanceCreateInfo createInfo{
 		    .pApplicationInfo        = &appInfo,
 		    .enabledExtensionCount   = glfwExtensionCount,
 		    .ppEnabledExtensionNames = glfwExtensions};
 		instance = vk::raii::Instance(context, createInfo);
+	}
+
+	void setupDebugMessenger()
+	{
+	}
+
+	std::vector<const char *> getRequireExtensions()
+	{
 	}
 };
 
