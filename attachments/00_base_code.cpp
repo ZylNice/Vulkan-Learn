@@ -38,10 +38,19 @@ class HelloTriangleApplication
   private:
 	GLFWwindow *window = nullptr;
 
-	vk::raii::Context  context;
+	vk::raii::Context context;
+
 	vk::raii::Instance instance = nullptr;
 
 	vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
+
+	vk::raii::PhysicalDevice physicalDevice = nullptr;        // 使用的显卡
+
+	std::vector<const char *> requiredDeviceExtension = {        // 需要的物理设备拓展
+	    vk::KHRSwapchainExtensionName,
+	    vk::KHRSpirv14ExtensionName,
+	    vk::KHRSynchronization2ExtensionName,
+	    vk::KHRCreateRenderpass2ExtensionName};
 
 	void initWindow()
 	{
@@ -57,6 +66,7 @@ class HelloTriangleApplication
 	{
 		createInstance();
 		setupDebugMessenger();
+		pickPhysicalDevice();
 	}
 
 	void mainLoop()
@@ -125,7 +135,7 @@ class HelloTriangleApplication
 		vk::DebugUtilsMessageSeverityFlagsEXT severityFlags(vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose |
 		                                                    vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
 		                                                    vk::DebugUtilsMessageSeverityFlagBitsEXT::eError);        // 哪些严重等级的消息是需要的
-		vk::DebugUtilsMessageTypeFlagsEXT  messageTypeFlags(vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
+		vk::DebugUtilsMessageTypeFlagsEXT     messageTypeFlags(vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
 		                                                       vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance |
 		                                                       vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation);        // 哪些类型的消息是需要的
 		vk::DebugUtilsMessengerCreateInfoEXT  debugUtilsMessengerCreateInfoEXT{
@@ -133,6 +143,38 @@ class HelloTriangleApplication
 		     .messageType     = messageTypeFlags,
 		     .pfnUserCallback = &debugCallback};
 		debugMessenger = instance.createDebugUtilsMessengerEXT(debugUtilsMessengerCreateInfoEXT);
+	}
+
+	void pickPhysicalDevice()
+	{
+		std::vector<vk::raii::PhysicalDevice> devices = instance.enumeratePhysicalDevices();        // 获取所有物理设备
+		const auto                            devIter = std::ranges::find_if(
+            devices,
+            [&](auto const &device) {
+                bool supportsVulkan1_3 = device.getProperties().apiVersion >= VK_API_VERSION_1_3;        // 检查是否支持 Vulkan 1.3
+
+                auto queueFamilies    = device.getQueueFamilyProperties();                              // 获取所有队列族
+                bool supportsGraphics = std::ranges::any_of(queueFamilies, [](auto const &qfp) {        // 检查是否支持图形队列
+                    return !!(qfp.queueFlags & vk::QueueFlagBits::eGraphics);
+                });
+
+                auto availExts                     = device.enumerateDeviceExtensionProperties();                                           // 获取显卡支持的所有设备拓展
+                bool supportsAllRequiredExtensions = std::ranges::all_of(requiredDeviceExtension, [&availExts](auto const &reqExt) {        // 检查显卡是否支持所有需要的设备拓展
+                    return std::ranges::any_of(availExts, [reqExt](auto const &availExt) {
+                        return strcmp(availExt.extensionName, reqExt) == 0;
+                    });
+                });
+
+                auto features = device.template getFeatures2<
+			                                   vk::PhysicalDeviceFeatures2,
+			                                   vk::PhysicalDeviceVulkan13Features,
+			                                   vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
+                bool supporsRequiredFeatures = features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
+                                               features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;
+            
+				// 汇总条件
+                return supportsVulkan1_3 && supportsGraphics && supportsAllRequiredExtensions && supporsRequiredFeatures;
+		});
 	}
 
 	std::vector<const char *> getRequiredExtensions()
