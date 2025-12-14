@@ -1,3 +1,5 @@
+// #pragma warning(disable : 26813)  // 屏蔽 C26813 警告: "使用‘按位与’来检查标志是否设置"
+
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
@@ -12,6 +14,7 @@ import vulkan_hpp;
 
 #define GLFW_INCLUDE_VULKAN        // 导入 glfwCreateWindowSurface 函数（条件编译 glfw3.h）
 #include <GLFW/glfw3.h>
+#include <set>
 
 const uint32_t WIDTH  = 800;
 const uint32_t HEIGHT = 600;
@@ -36,15 +39,14 @@ class HelloTriangleApplication
 	}
 
   private:
-	GLFWwindow *window = nullptr;
-
-	vk::raii::Context context;
-
-	vk::raii::Instance instance = nullptr;
-
+	GLFWwindow                      *window = nullptr;
+	vk::raii::Context                context;
+	vk::raii::Instance               instance       = nullptr;
 	vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
-
-	vk::raii::PhysicalDevice physicalDevice = nullptr;        // 使用的显卡
+	vk::raii::SurfaceKHR             surface        = nullptr;        // 窗口表面
+	vk::raii::PhysicalDevice         physicalDevice = nullptr;        // 使用的显卡
+	vk::raii::Device                 device         = nullptr;        // 逻辑设备
+	vk::raii::Queue                  queue  = nullptr;        // 队列（同时支持图形和显示）
 
 	std::vector<const char *> requiredDeviceExtension = {        // 需要的物理设备拓展
 	    vk::KHRSwapchainExtensionName,
@@ -66,7 +68,9 @@ class HelloTriangleApplication
 	{
 		createInstance();
 		setupDebugMessenger();
+		createSurface();
 		pickPhysicalDevice();
+		createLogicalDevice();
 	}
 
 	void mainLoop()
@@ -145,36 +149,99 @@ class HelloTriangleApplication
 		debugMessenger = instance.createDebugUtilsMessengerEXT(debugUtilsMessengerCreateInfoEXT);
 	}
 
+	void createSurface()
+	{
+		VkSurfaceKHR _surface;
+
+		auto result = glfwCreateWindowSurface(*instance, window, nullptr, &_surface);
+		if (result != VK_SUCCESS)
+		{
+			throw std::runtime_error("failed to create window surface!");
+		}
+		surface = vk::raii::SurfaceKHR(instance, _surface);
+	}
+
 	void pickPhysicalDevice()
 	{
 		std::vector<vk::raii::PhysicalDevice> devices = instance.enumeratePhysicalDevices();        // 获取所有物理设备
-		const auto                            devIter = std::ranges::find_if(
-            devices,
-            [&](auto const &device) {
-                bool supportsVulkan1_3 = device.getProperties().apiVersion >= VK_API_VERSION_1_3;        // 检查是否支持 Vulkan 1.3
 
-                auto queueFamilies    = device.getQueueFamilyProperties();                              // 获取所有队列族
-                bool supportsGraphics = std::ranges::any_of(queueFamilies, [](auto const &qfp) {        // 检查是否支持图形队列
-                    return !!(qfp.queueFlags & vk::QueueFlagBits::eGraphics);
-                });
+		const auto devIter = std::ranges::find_if(
+		    devices,
+		    [&](auto const &device) {
+			    bool supportsVulkan1_3 = device.getProperties().apiVersion >= VK_API_VERSION_1_3;        // 检查是否支持 Vulkan 1.3
 
-                auto availExts                     = device.enumerateDeviceExtensionProperties();                                           // 获取显卡支持的所有设备拓展
-                bool supportsAllRequiredExtensions = std::ranges::all_of(requiredDeviceExtension, [&availExts](auto const &reqExt) {        // 检查显卡是否支持所有需要的设备拓展
-                    return std::ranges::any_of(availExts, [reqExt](auto const &availExt) {
-                        return strcmp(availExt.extensionName, reqExt) == 0;
-                    });
-                });
+			    auto queueFamilies    = device.getQueueFamilyProperties();                              // 获取所有队列族
+			    bool supportsGraphics = std::ranges::any_of(queueFamilies, [](auto const &qfp) {        // 检查是否支持图形队列
+				    return !!(qfp.queueFlags & vk::QueueFlagBits::eGraphics);
+			    });
 
-                auto features = device.template getFeatures2<
-			                                   vk::PhysicalDeviceFeatures2,
-			                                   vk::PhysicalDeviceVulkan13Features,
-			                                   vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
-                bool supporsRequiredFeatures = features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
-                                               features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;
-            
-				// 汇总条件
-                return supportsVulkan1_3 && supportsGraphics && supportsAllRequiredExtensions && supporsRequiredFeatures;
-		});
+			    auto availExts                     = device.enumerateDeviceExtensionProperties();                                           // 获取显卡支持的所有设备拓展
+			    bool supportsAllRequiredExtensions = std::ranges::all_of(requiredDeviceExtension, [&availExts](auto const &reqExt) {        // 检查显卡是否支持所有需要的设备拓展
+				    return std::ranges::any_of(availExts, [reqExt](auto const &availExt) {
+					    return strcmp(availExt.extensionName, reqExt) == 0;
+				    });
+			    });
+
+			    auto features                = device.template getFeatures2<                    // 查询显卡支持的 Vulkan 特性
+                    vk::PhysicalDeviceFeatures2,                                 // 查询支持的 Vulkan 1.0 基础特性（链表头，Vulkan 规定第一个必须查询这个）
+                    vk::PhysicalDeviceVulkan13Features,                          // 查询支持的 Vulkan 1.3 新特性（看是否支持动态渲染）
+                    vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();        // 查询动态渲染状态特性（扩展特性）
+			    bool supporsRequiredFeatures = features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
+			                                   features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;
+
+			    // 汇总条件
+			    return supportsVulkan1_3 && supportsGraphics && supportsAllRequiredExtensions && supporsRequiredFeatures;
+		    });
+
+		if (devIter != devices.end())
+		{
+			physicalDevice = *devIter;
+		}
+		else
+		{
+			throw std::runtime_error("failed to find a suitable GPU");
+		}
+	}
+
+	void createLogicalDevice()
+	{
+		std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
+
+		uint32_t queueIndex = ~0; // 队列族索引，初始化为最大整数，作为无效值标记
+
+		for (uint32_t qfpIndex = 0; qfpIndex < queueFamilyProperties.size(); qfpIndex++) //遍历查找同时同时支持图形和显示的队列族
+		{
+			if ((queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eGraphics) && physicalDevice.getSurfaceSupportKHR(qfpIndex, *surface))
+			{
+				queueIndex = qfpIndex;
+				break;
+			}
+		}
+		if (queueIndex == ~0)
+		{
+			throw std::runtime_error("Could not find a queue for graphics and present -> terminating");
+		}
+
+		// 配置特性链
+		vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain = {
+		    {},                                     // 基础特性
+		    {.dynamicRendering = true},             // 开启动态渲染
+		    {.extendedDynamicState = true}};        // 开启扩展动态状态
+
+		float                     queuePriority = 0.5f;        // 队列优先级(0 ~ 1)
+		vk::DeviceQueueCreateInfo deviceQueueCreateInfo{       // 队列创建信息
+		                                                .queueFamilyIndex = queueIndex,
+		                                                .queueCount       = 1,
+		                                                .pQueuePriorities = &queuePriority};
+		vk::DeviceCreateInfo      deviceCreateInfo{
+		         .pNext                   = &featureChain.get<vk::PhysicalDeviceFeatures2>(),        // 将特性链挂载到 pNext
+		         .queueCreateInfoCount    = 1,
+		         .pQueueCreateInfos       = &deviceQueueCreateInfo,
+		         .enabledExtensionCount   = static_cast<uint32_t>(requiredDeviceExtension.size()),
+		         .ppEnabledExtensionNames = requiredDeviceExtension.data()};
+
+		device        = vk::raii::Device(physicalDevice, deviceCreateInfo);
+		queue = vk::raii::Queue(device, queueIndex, 0);        // 获取图形队列族的 0 号队列
 	}
 
 	std::vector<const char *> getRequiredExtensions()
