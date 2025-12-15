@@ -46,7 +46,12 @@ class HelloTriangleApplication
 	vk::raii::SurfaceKHR             surface        = nullptr;        // 窗口表面
 	vk::raii::PhysicalDevice         physicalDevice = nullptr;        // 使用的显卡
 	vk::raii::Device                 device         = nullptr;        // 逻辑设备
-	vk::raii::Queue                  queue  = nullptr;        // 队列（同时支持图形和显示）
+	vk::raii::Queue                  queue          = nullptr;        // 队列（同时支持图形和显示）
+	vk::raii::SwapchainKHR           swapChain      = nullptr;
+	std::vector<vk::Image>           swapChainImages;               // 图像句柄
+	vk::SurfaceFormatKHR             swapChainSurfaceFormat;        // 选定的图像格式
+	vk::Extent2D                     swapChainExtent;               // 选定的分辨率
+	std::vector<vk::raii::ImageView> swapChainImageViews;           //
 
 	std::vector<const char *> requiredDeviceExtension = {        // 需要的物理设备拓展
 	    vk::KHRSwapchainExtensionName,
@@ -207,9 +212,9 @@ class HelloTriangleApplication
 	{
 		std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
 
-		uint32_t queueIndex = ~0; // 队列族索引，初始化为最大整数，作为无效值标记
+		uint32_t queueIndex = ~0;        // 队列族索引，初始化为最大整数，作为无效值标记
 
-		for (uint32_t qfpIndex = 0; qfpIndex < queueFamilyProperties.size(); qfpIndex++) //遍历查找同时同时支持图形和显示的队列族
+		for (uint32_t qfpIndex = 0; qfpIndex < queueFamilyProperties.size(); qfpIndex++)        // 遍历查找同时同时支持图形和显示的队列族
 		{
 			if ((queueFamilyProperties[qfpIndex].queueFlags & vk::QueueFlagBits::eGraphics) && physicalDevice.getSurfaceSupportKHR(qfpIndex, *surface))
 			{
@@ -240,8 +245,8 @@ class HelloTriangleApplication
 		         .enabledExtensionCount   = static_cast<uint32_t>(requiredDeviceExtension.size()),
 		         .ppEnabledExtensionNames = requiredDeviceExtension.data()};
 
-		device        = vk::raii::Device(physicalDevice, deviceCreateInfo);
-		queue = vk::raii::Queue(device, queueIndex, 0);        // 获取图形队列族的 0 号队列
+		device = vk::raii::Device(physicalDevice, deviceCreateInfo);
+		queue  = vk::raii::Queue(device, queueIndex, 0);        // 获取图形队列族的 0 号队列
 	}
 
 	std::vector<const char *> getRequiredExtensions()
