@@ -76,6 +76,7 @@ class HelloTriangleApplication
 		createSurface();
 		pickPhysicalDevice();
 		createLogicalDevice();
+		createSwapChain();
 	}
 
 	void mainLoop()
@@ -247,6 +248,81 @@ class HelloTriangleApplication
 
 		device = vk::raii::Device(physicalDevice, deviceCreateInfo);
 		queue  = vk::raii::Queue(device, queueIndex, 0);        // 获取图形队列族的 0 号队列
+	}
+
+	void createSwapChain()
+	{
+		auto surfaceCapabilities = physicalDevice.getSurfaceCapabilitiesKHR(*surface);
+
+		swapChainExtent        = chooseSwapExtent(surfaceCapabilities);
+		swapChainSurfaceFormat = chooseSwapSurfaceFormat(physicalDevice.getSurfaceFormatsKHR(*surface));
+
+		vk::SwapchainCreateInfoKHR swapChainCreateInfo{
+		    .surface          = *surface,                                                                         // 指定交换链连接的 SurfaceKHR 对象
+		    .minImageCount    = chooseSwapMinImageCount(surfaceCapabilities),                                     // 交换链中包含的图像数量，vulkan 硬性规定最小为 2（双缓冲），一般选 3（三缓冲）
+		    .imageFormat      = swapChainSurfaceFormat.format,                                                    // 图像格式
+		    .imageColorSpace  = swapChainSurfaceFormat.colorSpace,                                                // 图像的色彩空间
+		    .imageExtent      = swapChainExtent,                                                                  // 图像分辨率
+		    .imageArrayLayers = 1,                                                                                // 每个图像包含的层数（VR 应用才设为 2，对应左右眼）
+		    .imageUsage       = vk::ImageUsageFlagBits::eColorAttachment,                                         // 直接通过渲染管线将颜色画到这张图上（图像用途）（后处理的离屏渲染用 eTransferDst
+		    .imageSharingMode = vk::SharingMode::eExclusive,                                                      // 独占模式（一张图像同一时间只能属于一个队列族）（图像在多个队列族之间如何共享）
+		    .preTransform     = surfaceCapabilities.currentTransform,                                             // 在呈现之前对图像进行的变换（平板电脑旋转时可能用到）
+		    .compositeAlpha   = vk::CompositeAlphaFlagBitsKHR::eOpaque,                                           // 窗口的 Alpha 通道如何与操作系统的其他窗口混合
+		    .presentMode      = chooseSwapPresentMode(physicalDevice.getSurfacePresentModesKHR(*surface)),        // 呈现模式（eFifo/eMailbox/eImmediate)
+		    .clipped          = true                                                                              // 开启裁剪（如果另一个窗口遮挡了本窗口，或本窗口有部分被移出了屏幕边缘，允许 Vulkan 丢弃那些看不见像素的渲染操作）
+		};
+
+		swapChain = vk::raii::SwapchainKHR(device, swapChainCreateInfo);
+
+		swapChainImages = swapChain.getImages();
+	}
+
+	static uint32_t chooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const &surfaceCapabilities)
+	{
+		auto minImageCount = std::max(3u, surfaceCapabilities.minImageCount);        // 尝试请求至少 3 张图像
+
+		if ((0 < surfaceCapabilities.maxImageCount) && (surfaceCapabilities.maxImageCount < minImageCount))
+		{
+			minImageCount = surfaceCapabilities.maxImageCount;        // 显卡不支持三缓冲，就只能用双缓冲
+		}
+		return minImageCount;
+	}
+
+	static vk::SurfaceFormatKHR chooseSwapSurfaceFormat(std::vector<vk::SurfaceFormatKHR> const &availableFormats)
+	{
+		assert(!availableFormats.empty());
+
+		const auto formatIt = std::ranges::find_if(
+		    availableFormats,
+		    [](const auto &format) {
+			    return format.format == vk::Format::eR8G8B8A8Srgb && format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;        // eR8G8B8A8Srgb（GPU 内部） : Shader 输出颜色时 GPU 自动做 x^{1/2.2} 编码，Texture Sampler 采样时 GPU 自动做 x^{2.2} 解码
+		    });																														// eSrgbNonlinear 显示器怎么解释这个显存数据（色域不同）
+
+		return formatIt != availableFormats.end() ? *formatIt : availableFormats[0];
+	}
+
+	static vk::PresentModeKHR chooseSwapPresentMode(const std::vector<vk::PresentModeKHR> &availablePresentModes)
+	{
+		assert(std::ranges::any_of(availablePresentModes, [](auto presentMode) { return presentMode == vk::PresentModeKHR::eFifo; }));
+
+		return std::ranges::any_of(availablePresentModes, [](const vk::PresentModeKHR value) { return vk::PresentModeKHR::eMailbox == value; }) ?
+		           vk::PresentModeKHR::eMailbox :        // 首选 Mailbox
+		           vk::PresentModeKHR::eFifo;            // 垂直同步
+	}
+
+	vk::Extent2D chooseSwapExtent(const vk::SurfaceCapabilitiesKHR &capabilities)
+	{
+		if (capabilities.currentExtent.width != 0xFFFFFFFF) // 驱动是否写死了窗口大小
+		{
+			return capabilities.currentExtent; // 驱动写死了窗口大小
+		}
+
+		int width, height;
+		glfwGetFramebufferSize(window, &width, &height);
+
+		return {  // 确保图像分辨率在显卡支持的范围内
+		    std::clamp<uint32_t>(width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
+		    std::clamp<uint32_t>(height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height)};
 	}
 
 	std::vector<const char *> getRequiredExtensions()
