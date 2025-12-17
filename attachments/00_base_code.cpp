@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -14,7 +15,6 @@ import vulkan_hpp;
 
 #define GLFW_INCLUDE_VULKAN        // 导入 glfwCreateWindowSurface 函数（条件编译 glfw3.h）
 #include <GLFW/glfw3.h>
-#include <set>
 
 const uint32_t WIDTH  = 800;
 const uint32_t HEIGHT = 600;
@@ -78,6 +78,7 @@ class HelloTriangleApplication
 		createLogicalDevice();
 		createSwapChain();
 		createImageViews();
+		createGraphicsPipeline();
 	}
 
 	void mainLoop()
@@ -293,20 +294,23 @@ class HelloTriangleApplication
 		}
 	}
 
-	void createImageViews()
+	void createGraphicsPipeline()
 	{
-		assert(swapChainImageViews.empty());
+		vk::raii::ShaderModule shaderModule = createShaderModule(readFile("shaders/slang.spv"));
 
-		vk::ImageViewCreateInfo imageViewCreateInfo{
-		    .viewType         = vk::ImageViewType::e2D,
-		    .format           = swapChainSurfaceFormat.format,
-		    .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+		vk::PipelineShaderStageCreateInfo vertShaderStageInfo{.stage = vk::ShaderStageFlagBits::eVertex, .module = shaderModule, .pName = "vertMain"};
+		vk::PipelineShaderStageCreateInfo fragShaderStageInfo{.stage = vk::ShaderStageFlagBits::eFragment, .module = shaderModule, .pName = "fragMain"};
+		vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
+	}
 
-		for (auto &image : swapChainImages)
-		{
-			imageViewCreateInfo.image = image;
-			swapChainImageViews.emplace_back(device, imageViewCreateInfo);
-		}
+	[[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char> &code) const
+	{
+		vk::ShaderModuleCreateInfo createInfo{
+		    .codeSize = code.size() * sizeof(char),
+		    .pCode    = reinterpret_cast<const uint32_t *>(code.data())};
+		vk::raii::ShaderModule shaderModule{device, createInfo};
+
+		return shaderModule;
 	}
 
 	static uint32_t chooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const &surfaceCapabilities)
@@ -380,6 +384,20 @@ class HelloTriangleApplication
 		}
 
 		return vk::False;
+	}
+
+	static std::vector<char> readFile(const std::string &filename)
+	{
+		std::ifstream file(filename, std::ios::ate | std::ios::binary);        // 从文件末尾开始，以二进制格式读取
+		if (!file.is_open())
+		{
+			throw std::runtime_error("failed to open file");
+		}
+		std::vector<char> buffer(file.tellg());                                       // 由于从文件末尾开始读，可以通过当前读指针确定缓冲区大小
+		file.seekg(0, std::ios::beg);                                                 // 回到文件开头
+		file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));        // 读文件所有数据
+		file.close();
+		return buffer;
 	}
 };
 

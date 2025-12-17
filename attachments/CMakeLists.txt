@@ -171,7 +171,8 @@ function (add_chapter CHAPTER_NAME)
   endif ()
 endfunction ()
 
-add_chapter (00_base_code)
+add_chapter (00_base_code
+    SHADER 09_shader_base)
 
 add_chapter (01_instance_creation)
 
