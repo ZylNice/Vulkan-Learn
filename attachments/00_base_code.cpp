@@ -48,10 +48,10 @@ class HelloTriangleApplication
 	vk::raii::Device                 device         = nullptr;        // 逻辑设备
 	vk::raii::Queue                  queue          = nullptr;        // 队列（同时支持图形和显示）
 	vk::raii::SwapchainKHR           swapChain      = nullptr;
-	std::vector<vk::Image>           swapChainImages;               // 图像句柄
-	vk::SurfaceFormatKHR             swapChainSurfaceFormat;        // 选定的图像格式
-	vk::Extent2D                     swapChainExtent;               // 选定的分辨率
-	std::vector<vk::raii::ImageView> swapChainImageViews;           // 交换链所有图像对应的 ImageView
+	std::vector<vk::Image>           swapChainImages;               // 交换链中的图像
+	vk::SurfaceFormatKHR             swapChainSurfaceFormat;        // 交换链中图像格式
+	vk::Extent2D                     swapChainExtent;               // 交换链中图像分辨率
+	std::vector<vk::raii::ImageView> swapChainImageViews;           // 管线通过 imageview 接口，访问交换链中的图像
 
 	std::vector<const char *> requiredDeviceExtension = {        // 需要的物理设备拓展
 	    vk::KHRSwapchainExtensionName,
@@ -281,6 +281,21 @@ class HelloTriangleApplication
 	void createImageViews()
 	{
 		assert(swapChainImageViews.empty());
+		vk::ImageViewCreateInfo imageViewCreateInfo{
+		    .viewType         = vk::ImageViewType::e2D,
+		    .format           = swapChainSurfaceFormat.format,
+		    .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+
+		for (auto &image : swapChainImages)
+		{
+			imageViewCreateInfo.image = image;
+			swapChainImageViews.emplace_back(device, imageViewCreateInfo);
+		}
+	}
+
+	void createImageViews()
+	{
+		assert(swapChainImageViews.empty());
 
 		vk::ImageViewCreateInfo imageViewCreateInfo{
 		    .viewType         = vk::ImageViewType::e2D,
@@ -312,7 +327,7 @@ class HelloTriangleApplication
 		const auto formatIt = std::ranges::find_if(
 		    availableFormats,
 		    [](const auto &format) {
-			    return format.format == vk::Format::eR8G8B8A8Srgb && format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;        // eR8G8B8A8Srgb（GPU 内部） : Shader 输出颜色时 GPU 自动做 x^{1/2.2} 编码，Texture Sampler 采样时 GPU 自动做 x^{2.2} 解码
+			    return format.format == vk::Format::eB8G8R8A8Srgb && format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;        // eB8G8R8A8Srgb（GPU 内部） : Shader 输出颜色时 GPU 自动做 x^{1/2.2} 编码，Texture Sampler 采样时 GPU 自动做 x^{2.2} 解码
 		    });                                                                                                                     // eSrgbNonlinear 显示器怎么解释这个显存数据（色域不同）
 
 		return formatIt != availableFormats.end() ? *formatIt : availableFormats[0];
