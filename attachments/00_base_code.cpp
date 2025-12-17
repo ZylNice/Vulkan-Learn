@@ -231,8 +231,9 @@ class HelloTriangleApplication
 		}
 
 		// 配置特性链
-		vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain = {
+		vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain = {
 		    {},                                     // 基础特性
+		    {.shaderDrawParameters = true},         // 获取 gl_BaseVertex 访问能力（shader 中的 SV_VertexID = gl_VertexIndex - gl_BaseVertex，仅 gl_VertexIndex 常驻）
 		    {.dynamicRendering = true},             // 开启动态渲染
 		    {.extendedDynamicState = true}};        // 开启扩展动态状态
 
@@ -301,6 +302,18 @@ class HelloTriangleApplication
 		vk::PipelineShaderStageCreateInfo vertShaderStageInfo{.stage = vk::ShaderStageFlagBits::eVertex, .module = shaderModule, .pName = "vertMain"};
 		vk::PipelineShaderStageCreateInfo fragShaderStageInfo{.stage = vk::ShaderStageFlagBits::eFragment, .module = shaderModule, .pName = "fragMain"};
 		vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
+
+		vk::PipelineVertexInputStateCreateInfo   vertexInputInfo;
+		vk::PipelineInputAssemblyStateCreateInfo inputAssembly{.topology = vk::PrimitiveTopology::eTriangleList}; // 输入装配
+		vk::PipelineViewportStateCreateInfo      viewportState{.viewportCount = 1, .scissorCount = 1}; // 仅指定数量，不指定内容，是因为我们在动态渲染中指定内容
+
+		std::vector dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+		vk::PipelineDynamicStateCreateInfo{
+		    .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
+		    .pDynamicStates    = dynamicStates.data()};
+
+		vk::PipelineRasterizationStateCreateInfo rasterizer{};
+
 	}
 
 	[[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char> &code) const

@@ -1,4 +1,4 @@
-static float2 positions[3] = float2[](
+﻿static float2 positions[3] = float2[](
 	float2(0.0, -0.5),
 	float2(0.5, 0.5),
 	float2(-0.5, 0.5)
@@ -12,7 +12,7 @@ static float3 colors[3] = float3[](
 
 struct VertexOutput {
     float3 color;
-    float4 sv_position : SV_Position;
+    float4 sv_position : SV_Position; // 这是顶点的裁剪空间坐标
 };
 
 [shader("vertex")]
