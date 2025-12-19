@@ -53,6 +53,8 @@ class HelloTriangleApplication
 	vk::Extent2D                     swapChainExtent;               // 交换链中图像分辨率
 	std::vector<vk::raii::ImageView> swapChainImageViews;           // 管线通过 imageview 接口，访问交换链中的图像
 
+	vk::raii::PipelineLayout pipelineLayout = nullptr;
+
 	std::vector<const char *> requiredDeviceExtension = {        // 需要的物理设备拓展
 	    vk::KHRSwapchainExtensionName,
 	    vk::KHRSpirv14ExtensionName,
@@ -304,16 +306,41 @@ class HelloTriangleApplication
 		vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
 
 		vk::PipelineVertexInputStateCreateInfo   vertexInputInfo;
-		vk::PipelineInputAssemblyStateCreateInfo inputAssembly{.topology = vk::PrimitiveTopology::eTriangleList}; // 输入装配
-		vk::PipelineViewportStateCreateInfo      viewportState{.viewportCount = 1, .scissorCount = 1}; // 仅指定数量，不指定内容，是因为我们在动态渲染中指定内容
+		vk::PipelineInputAssemblyStateCreateInfo inputAssembly{.topology = vk::PrimitiveTopology::eTriangleList};        // 输入装配
+		vk::PipelineViewportStateCreateInfo      viewportState{.viewportCount = 1, .scissorCount = 1};                   // 仅指定数量，不指定内容，是因为我们在动态渲染中指定内容
 
 		std::vector dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
 		vk::PipelineDynamicStateCreateInfo{
 		    .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
 		    .pDynamicStates    = dynamicStates.data()};
 
-		vk::PipelineRasterizationStateCreateInfo rasterizer{};
+		// 光栅化器
+		vk::PipelineRasterizationStateCreateInfo rasterizer{
+		    .depthClampEnable        = vk::False,
+		    .rasterizerDiscardEnable = vk::False,
+		    .polygonMode             = vk::PolygonMode::eFill,             // 填充三角形内部（填充模式）
+		    .cullMode                = vk::CullModeFlagBits::eBack,        // 剔除背面
+		    .frontFace               = vk::FrontFace::eClockwise,          // 顺时针为正面
+		    .depthBiasEnable         = vk::False,
+		    .lineWidth               = 1.0f};
 
+		// 多重采样
+		vk::PipelineMultisampleStateCreateInfo multisampling{
+		    .rasterizationSamples = vk::SampleCountFlagBits::e1,        // 采样数为 1（关闭 MSAA）
+		    .sampleShadingEnable  = vk::False};
+
+		// 颜色混合
+		vk::PipelineColorBlendAttachmentState colorBlendAttachment{
+		    .blendEnable    = vk::False,        // 关闭混合
+		    .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA};
+
+		vk::PipelineColorBlendStateCreateInfo colorBlending{
+		    .logicOpEnable   = vk::False,
+		    .attachmentCount = 1,
+		    .pAttachments    = &colorBlendAttachment};
+
+		vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
+		pipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
 	}
 
 	[[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char> &code) const
