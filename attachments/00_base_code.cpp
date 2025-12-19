@@ -53,7 +53,7 @@ class HelloTriangleApplication
 	vk::Extent2D                     swapChainExtent;               // 交换链中图像分辨率
 	std::vector<vk::raii::ImageView> swapChainImageViews;           // 管线通过 imageview 接口，访问交换链中的图像
 
-	vk::raii::PipelineLayout pipelineLayout = nullptr;
+	vk::raii::PipelineLayout pipelineLayout = nullptr;        // 管线布局
 
 	std::vector<const char *> requiredDeviceExtension = {        // 需要的物理设备拓展
 	    vk::KHRSwapchainExtensionName,
