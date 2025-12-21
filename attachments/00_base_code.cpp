@@ -53,7 +53,8 @@ class HelloTriangleApplication
 	vk::Extent2D                     swapChainExtent;               // 交换链中图像分辨率
 	std::vector<vk::raii::ImageView> swapChainImageViews;           // 管线通过 imageview 接口，访问交换链中的图像
 
-	vk::raii::PipelineLayout pipelineLayout = nullptr;        // 管线布局
+	vk::raii::PipelineLayout pipelineLayout   = nullptr;        // 管线布局
+	vk::raii::Pipeline       graphicsPipeline = nullptr;        // 图形管线对象
 
 	std::vector<const char *> requiredDeviceExtension = {        // 需要的物理设备拓展
 	    vk::KHRSwapchainExtensionName,
@@ -307,12 +308,7 @@ class HelloTriangleApplication
 
 		vk::PipelineVertexInputStateCreateInfo   vertexInputInfo;
 		vk::PipelineInputAssemblyStateCreateInfo inputAssembly{.topology = vk::PrimitiveTopology::eTriangleList};        // 输入装配
-		vk::PipelineViewportStateCreateInfo      viewportState{.viewportCount = 1, .scissorCount = 1};                   // 仅指定数量，不指定内容，是因为我们在动态渲染中指定内容
-
-		std::vector dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
-		vk::PipelineDynamicStateCreateInfo{
-		    .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
-		    .pDynamicStates    = dynamicStates.data()};
+		vk::PipelineViewportStateCreateInfo      viewportState{.viewportCount = 1, .scissorCount = 1};                   // 仅指定数量，不指定内容（就算指定了内容也会被忽略，因为后续其被指定为动态状态）
 
 		// 光栅化器
 		vk::PipelineRasterizationStateCreateInfo rasterizer{
@@ -329,18 +325,52 @@ class HelloTriangleApplication
 		    .rasterizationSamples = vk::SampleCountFlagBits::e1,        // 采样数为 1（关闭 MSAA）
 		    .sampleShadingEnable  = vk::False};
 
-		// 颜色混合
+		// 颜色混合附件
 		vk::PipelineColorBlendAttachmentState colorBlendAttachment{
 		    .blendEnable    = vk::False,        // 关闭混合
 		    .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA};
 
+		// 全局颜色混合设置
 		vk::PipelineColorBlendStateCreateInfo colorBlending{
 		    .logicOpEnable   = vk::False,
 		    .attachmentCount = 1,
 		    .pAttachments    = &colorBlendAttachment};
 
-		vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
+		// 动态渲染
+		std::vector                        dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
+		vk::PipelineDynamicStateCreateInfo dynamicState{
+		    .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
+		    .pDynamicStates    = dynamicStates.data()};
+
+		vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
+		    .setLayoutCount         = 0,        // Set（描述符集）数量为 0，一个 Set 中可以包含多个 Binding（UBO/纹理）
+		    .pushConstantRangeCount = 0         // 推送常量数量为 0
+		};
+
 		pipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
+
+		vk::StructureChain<vk::GraphicsPipelineCreateInfo, vk::PipelineRenderingCreateInfo> pipelineCreateInfoChain = {
+		    // 标准管线配置
+		    {
+		        .stageCount          = 2,                       // 着色器阶段数量（顶点 + 片段 = 2）
+		        .pStages             = shaderStages,            // 指向着色器阶段入口
+		        .pVertexInputState   = &vertexInputInfo,        // 顶点输入状态
+		        .pInputAssemblyState = &inputAssembly,          // 输入装配状态
+		        .pViewportState      = &viewportState,          // 视口状态（视口+裁剪）
+		        .pRasterizationState = &rasterizer,             // 光栅化状态
+		        .pMultisampleState   = &multisampling,          // 多重采样状态
+		        .pColorBlendState    = &colorBlending,          // 颜色混合状态
+		        .pDynamicState       = &dynamicState,           // 动态状态（允许在 CommandBuffer 中动态修改）
+		        .layout              = pipelineLayout,          // 管线布局
+		        .renderPass          = nullptr                  // 动态渲染不需要 renderPass
+		    },
+		    // 动态渲染配置
+		    {
+		        .colorAttachmentCount    = 1,
+		        .pColorAttachmentFormats = &swapChainSurfaceFormat.format        // 颜色附件格式列表
+		    }};
+
+		graphicsPipeline = vk::raii::Pipeline(device, nullptr, pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>());
 	}
 
 	[[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char> &code) const
