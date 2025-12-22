@@ -46,6 +46,7 @@ class HelloTriangleApplication
 	vk::raii::SurfaceKHR             surface        = nullptr;        // 窗口表面
 	vk::raii::PhysicalDevice         physicalDevice = nullptr;        // 使用的显卡
 	vk::raii::Device                 device         = nullptr;        // 逻辑设备
+	uint32_t                         queueIndex     = ~0;             // 队列族索引，初始化为最大整数，作为无效值标记
 	vk::raii::Queue                  queue          = nullptr;        // 队列（同时支持图形和显示）
 	vk::raii::SwapchainKHR           swapChain      = nullptr;
 	std::vector<vk::Image>           swapChainImages;               // 交换链中的图像
@@ -55,6 +56,8 @@ class HelloTriangleApplication
 
 	vk::raii::PipelineLayout pipelineLayout   = nullptr;        // 管线布局
 	vk::raii::Pipeline       graphicsPipeline = nullptr;        // 图形管线对象
+	vk::raii::CommandPool    commandPool      = nullptr;        // 命令池，用于分配命令缓冲
+	vk::raii::CommandBuffer  commandBuffer    = nullptr;        // 命令缓冲，用于记录绘图指令
 
 	std::vector<const char *> requiredDeviceExtension = {        // 需要的物理设备拓展
 	    vk::KHRSwapchainExtensionName,
@@ -82,6 +85,8 @@ class HelloTriangleApplication
 		createSwapChain();
 		createImageViews();
 		createGraphicsPipeline();
+		createCommandPool();
+		createCommandBuffer();
 	}
 
 	void mainLoop()
@@ -217,8 +222,6 @@ class HelloTriangleApplication
 	void createLogicalDevice()
 	{
 		std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
-
-		uint32_t queueIndex = ~0;        // 队列族索引，初始化为最大整数，作为无效值标记
 
 		for (uint32_t qfpIndex = 0; qfpIndex < queueFamilyProperties.size(); qfpIndex++)        // 遍历查找同时同时支持图形和显示的队列族
 		{
@@ -371,6 +374,25 @@ class HelloTriangleApplication
 		    }};
 
 		graphicsPipeline = vk::raii::Pipeline(device, nullptr, pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>());
+	}
+
+	void createCommandPool()
+	{
+		vk::CommandPoolCreateInfo poolInfo{
+		    .flags            = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,        // 允许单独重置该命令池分配出的 CommandBuffer（复用）
+		    .queueFamilyIndex = queueIndex                                                 // 该命令池分配的命令缓冲只能提交给序号为 queueIndex 的队列族
+		};
+		commandPool = vk::raii::CommandPool(device, poolInfo);
+	}
+
+	void createCommandBuffer()
+	{
+		vk::CommandBufferAllocateInfo allocInfo{
+		    .commandPool        = commandPool,                             // 从哪个命令池分配命令缓冲
+		    .level              = vk::CommandBufferLevel::ePrimary,        // 主要缓冲，可以直接提交给队列执行
+		    .commandBufferCount = 1                                        // 仅分配一个命令缓冲
+		};
+		commandBuffer = std::move(vk::raii::CommandBuffers(device, allocInfo).front());        // CommandBuffers 函数返回的是命令缓冲数组，需要提取其中的首个命令缓冲元素
 	}
 
 	[[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char> &code) const
