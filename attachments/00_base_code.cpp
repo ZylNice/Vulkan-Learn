@@ -59,6 +59,10 @@ class HelloTriangleApplication
 	vk::raii::CommandPool    commandPool      = nullptr;        // 命令池，用于分配命令缓冲
 	vk::raii::CommandBuffer  commandBuffer    = nullptr;        // 命令缓冲，用于记录绘图指令
 
+	vk::raii::Semaphore presentCompleteSemphore = nullptr;        // 图像获取完成信号（GPU内）
+	vk::raii::Semaphore renderFinishedSemphore  = nullptr;        // 渲染完成信号（GPU内）
+	vk::raii::Fence     drawFence               = nullptr;        // CPU 等待 GPU 完成的栅栏
+
 	std::vector<const char *> requiredDeviceExtension = {        // 需要的物理设备拓展
 	    vk::KHRSwapchainExtensionName,
 	    vk::KHRSpirv14ExtensionName,
@@ -87,6 +91,7 @@ class HelloTriangleApplication
 		createGraphicsPipeline();
 		createCommandPool();
 		createCommandBuffer();
+		createSyncObjects();
 	}
 
 	void mainLoop()
@@ -94,7 +99,9 @@ class HelloTriangleApplication
 		while (!glfwWindowShouldClose(window))
 		{
 			glfwPollEvents();        // 取出上一帧积压的输入（操作系统用事件队列保存上一帧积压的输入事件）
+			drawFrame();
 		}
+		device.waitIdle();        // 避免在 GPU 结束工作前关闭窗口，释放显存资源，导致 GPU 非法访问释放的资源，进而驱动崩溃
 	}
 
 	void cleanup()
@@ -393,6 +400,86 @@ class HelloTriangleApplication
 		    .commandBufferCount = 1                                        // 仅分配一个命令缓冲
 		};
 		commandBuffer = std::move(vk::raii::CommandBuffers(device, allocInfo).front());        // CommandBuffers 函数返回的是命令缓冲数组，需要提取其中的首个命令缓冲元素
+	}
+
+	void recordCommand(uint32_t imageIndex)
+	{
+		commandBuffer.begin({});        // 开始录制命令
+
+		transition_image_layout(        // 转换图像的布局
+		    imageIndex,
+		    vk::ImageLayout::eUndefined,                               //
+		    vk::ImageLayout::eColorAttachmentOptimal,                  // 颜色附件
+		    {},                                                        // 不需要等待之前的操作
+		    vk::AccessFlagBits2::eColorAttachmentWrite,                // 转化后写入颜色
+		    vk::PipelineStageFlagBits2::eColorAttachmentOutput,        //
+		    vk::PipelineStageFlagBits2::eColorAttachmentOutput         //
+		);
+
+		vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+
+		// 颜色附件信息
+		vk::RenderingAttachmentInfo attachmentInfo = {
+		    .imageView   = swapChainImageViews[imageIndex],
+		    .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+		    .loadOp      = vk::AttachmentLoadOp::eClear,
+		    .storeOp     = vk::AttachmentStoreOp::eStore,
+		    .clearValue  = clearColor};
+
+		// 渲染信息
+		vk::RenderingInfo renderingInfo = {
+		    .renderArea           = {.offset = {0, 0}, .extent = swapChainExtent},
+		    .layerCount           = 1,
+		    .colorAttachmentCount = 1,
+		    .pColorAttachments    = &attachmentInfo};
+
+		commandBuffer.beginRendering(renderingInfo);        // 开始动态渲染
+
+		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);        // 绑定图形管线
+
+		commandBuffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent.width), static_cast<float>(swapChainExtent.height), 0.0f, 1.0f));        // 设置动态视口
+
+		commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));        // 设置动态裁剪
+
+		commandBuffer.endRendering();        // 结束动态渲染
+
+		// 转换图像的布局
+		transition_image_layout(
+		    imageIndex,
+		    vk::ImageLayout::eColorAttachmentOptimal,
+		    vk::ImageLayout::ePresentSrcKHR,
+		    vk::AccessFlagBits2::eColorAttachmentWrite,
+		    {},
+		    vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+		    vk::PipelineStageFlagBits2::eBottomOfPipe);
+
+		commandBuffer.end();        // 结束录制
+	}
+
+	void transition_image_layout(
+	    uint32_t                imageIndex,             // Swapchain 中的哪一张图
+	    vk::ImageLayout         old_layout,             // 初始布局
+	    vk::ImageLayout         new_layout,             // 目标布局
+	    vk::AccessFlags2        src_access_mask,        // 源访问掩码
+	    vk::AccessFlags2        dst_access_mask,        // 目标访问掩码
+	    vk::PipelineStageFlags2 src_stage_mask,         // 源阶段
+	    vk::PipelineStageFlags2 dst_stage_mask          // 目标阶段
+	)
+	{
+		vk::ImageMemoryBarrier2 barrier         = {};
+		vk::DependencyInfo      dependency_info = {};
+		commandBuffer.pipelineBarrier2(dependency_info);
+	}
+
+	void createSyncObjects()
+	{
+		presentCompleteSemphore = vk::raii::Semaphore(device, vk::SemaphoreCreateInfo());                        // 二值信号量（默认创建信息）
+		renderFinishedSemphore  = vk::raii::Semaphore(device, vk::SemaphoreCreateInfo());                        // 二值信号量（默认创建信息）
+		drawFence               = vk::raii::Fence(device, {.flags = vk::FenceCreateFlagBits::eSignaled});        // 初始栅栏是已触发状态（如果初始是未触发，会导致第一帧死锁）
+	}
+
+	void drawFrame()
+	{
 	}
 
 	[[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char> &code) const
