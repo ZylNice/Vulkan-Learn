@@ -406,7 +406,7 @@ class HelloTriangleApplication
 	{
 		commandBuffer.begin({});        // 开始录制命令
 
-		transition_image_layout(        // 转换图像的布局
+		transition_image_layout(        // 设置管线屏障
 		    imageIndex,
 		    vk::ImageLayout::eUndefined,                               //
 		    vk::ImageLayout::eColorAttachmentOptimal,                  // 颜色附件
@@ -466,8 +466,31 @@ class HelloTriangleApplication
 	    vk::PipelineStageFlags2 dst_stage_mask          // 目标阶段
 	)
 	{
-		vk::ImageMemoryBarrier2 barrier         = {};
-		vk::DependencyInfo      dependency_info = {};
+		// 图像内存屏障
+		vk::ImageMemoryBarrier2 barrier = {
+		    .srcStageMask        = src_stage_mask,                     // 屏障之前，必须完成的流水线阶段
+		    .srcAccessMask       = src_access_mask,                    // 屏障之前，等源流水线阶段完成后，将其缓存中需要同步的数据类型写入显存（确保可见性）
+		    .dstStageMask        = dst_stage_mask,                     // 屏障之后，必须等待的流水线阶段（阻塞）
+		    .dstAccessMask       = dst_access_mask,                    // 屏障之后，目标流水线阶段缓存中的需要同步的数据设置为过期（着色器使用数据时，发现已过期回自动去显存拉取最新数据，从而完成数据同步）
+		    .oldLayout           = old_layout,                         // 图像当前内存布局
+		    .newLayout           = new_layout,                         // 图像转换后的内存布局
+		    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,            // 源队列族索引（在不同队列之间交换资源所有权）
+		    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,            // 目标队列族索引
+		    .image               = swapChainImages[imageIndex],        // 目标图像
+		    .subresourceRange    =                                     // 图像的哪些部分
+		    {
+		        .aspectMask     = vk::ImageAspectFlagBits::eColor,        // 图像的哪些层面
+		        .baseMipLevel   = 0,                                      // Mapmap 层级范围
+		        .levelCount     = 1,                                      // Mapmap 层级范围
+		        .baseArrayLayer = 0,                                      // 数组层范围
+		        .layerCount     = 1                                       // 数组层范围
+		    }};
+
+		vk::DependencyInfo dependency_info = {
+		    .dependencyFlags         = {},
+		    .imageMemoryBarrierCount = 1,
+		    .pImageMemoryBarriers    = &barrier};
+
 		commandBuffer.pipelineBarrier2(dependency_info);
 	}
 
