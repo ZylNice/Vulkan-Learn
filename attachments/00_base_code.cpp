@@ -406,40 +406,50 @@ class HelloTriangleApplication
 	{
 		commandBuffer.begin({});        // 开始录制命令
 
-		transition_image_layout(        // 设置管线屏障
+		transition_image_layout(        // 设置管线屏障，这里是对图像内存布局转化做同步
 		    imageIndex,
-		    vk::ImageLayout::eUndefined,                               //
-		    vk::ImageLayout::eColorAttachmentOptimal,                  // 颜色附件
-		    {},                                                        // 不需要等待之前的操作
-		    vk::AccessFlagBits2::eColorAttachmentWrite,                // 转化后写入颜色
-		    vk::PipelineStageFlagBits2::eColorAttachmentOutput,        //
-		    vk::PipelineStageFlagBits2::eColorAttachmentOutput         //
+		    vk::ImageLayout::eUndefined,                               // 不关心图像的原布局（因为不保留原内容）
+		    vk::ImageLayout::eColorAttachmentOptimal,                  // 将图像布局切换为颜色附件最优布局
+		    {},                                                        // 无需对源阶段地输出结果做任何同步处理（从源阶段缓存写入内存）
+		    vk::AccessFlagBits2::eColorAttachmentWrite,                // 颜色写入操作（动作）（真正参与同步的操作）（一个流水线阶段有多个操作，不是每个都要参与同步）
+		    vk::PipelineStageFlagBits2::eColorAttachmentOutput,        // 上一颜色写入阶段（时间点）（该阶段一定在屏障前结束）（确保颜色写入结束后，才做图像内存布局转换）
+		    vk::PipelineStageFlagBits2::eColorAttachmentOutput         // 下一颜色写入阶段（时间点）（该阶段一定在屏障后开始）（确保图像内存布局转换结束后，才执行颜色写入）
 		);
 
-		vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+		vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);        // 定义清除颜色
 
 		// 颜色附件信息
 		vk::RenderingAttachmentInfo attachmentInfo = {
 		    .imageView   = swapChainImageViews[imageIndex],
 		    .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
 		    .loadOp      = vk::AttachmentLoadOp::eClear,
-		    .storeOp     = vk::AttachmentStoreOp::eStore,
+		    .storeOp     = vk::AttachmentStoreOp::eStore,        // 渲染结果要从缓存写会显存（最后阶段的深度缓冲就可以选择不写入，优化性能）（多重抗锯齿的 MSAA 原图用完也不用写回显存）
 		    .clearValue  = clearColor};
 
 		// 渲染信息
 		vk::RenderingInfo renderingInfo = {
-		    .renderArea           = {.offset = {0, 0}, .extent = swapChainExtent},
-		    .layerCount           = 1,
-		    .colorAttachmentCount = 1,
-		    .pColorAttachments    = &attachmentInfo};
+		    .renderArea           = {.offset = {0, 0}, .extent = swapChainExtent},        // 渲染区域，从左上角（0，0）向右下渲染 extent 宽高大小的图
+		    .layerCount           = 1,                                                    // 纹理层数
+		    .colorAttachmentCount = 1,                                                    // 颜色附件数量
+		    .pColorAttachments    = &attachmentInfo                                       // 颜色附件信息结构体
+		};
 
 		commandBuffer.beginRendering(renderingInfo);        // 开始动态渲染
 
-		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);        // 绑定图形管线
+		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);        // 绑定图形管线（告诉 GPU 使用那套着色器和装态配置）
 
-		commandBuffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent.width), static_cast<float>(swapChainExtent.height), 0.0f, 1.0f));        // 设置动态视口
+		commandBuffer.setViewport(0, vk::Viewport(                                          // 设置动态视口
+		                                 0.0f, 0.0f,                                        // 视口矩形左上角坐标
+		                                 static_cast<float>(swapChainExtent.width),         // 视口宽度
+		                                 static_cast<float>(swapChainExtent.height),        // 视口高度
+		                                 0.0f,                                              // 最小深度（Vulkan 的 NDC 空间与 DirectX 保持一致，与 OpenGL 不同）(Vulkan 的 NDC 的 z 轴范围是 [0, 1]，不再是标准立方体的 [-1, 1]）
+		                                 1.0f                                               // 最大深度
+		                                 ));
 
-		commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));        // 设置动态裁剪
+		commandBuffer.setScissor(0, vk::Rect2D(                    // 设置动态裁剪
+		                                vk::Offset2D(0, 0),        // 左上角起点
+		                                swapChainExtent            // 裁剪矩形宽高
+		                                ));
 
 		commandBuffer.endRendering();        // 结束动态渲染
 
@@ -460,10 +470,10 @@ class HelloTriangleApplication
 	    uint32_t                imageIndex,             // Swapchain 中的哪一张图
 	    vk::ImageLayout         old_layout,             // 初始布局
 	    vk::ImageLayout         new_layout,             // 目标布局
-	    vk::AccessFlags2        src_access_mask,        // 源访问掩码
-	    vk::AccessFlags2        dst_access_mask,        // 目标访问掩码
-	    vk::PipelineStageFlags2 src_stage_mask,         // 源阶段
-	    vk::PipelineStageFlags2 dst_stage_mask          // 目标阶段
+	    vk::AccessFlags2        src_access_mask,        // 内存操作（何种读写动作）
+	    vk::AccessFlags2        dst_access_mask,        // 内存操作（何种读写动作）
+	    vk::PipelineStageFlags2 src_stage_mask,         // 源流水线阶段 （时间点）
+	    vk::PipelineStageFlags2 dst_stage_mask          // 目标流水线阶段（时间点）
 	)
 	{
 		// 图像内存屏障
@@ -472,24 +482,25 @@ class HelloTriangleApplication
 		    .srcAccessMask       = src_access_mask,                    // 屏障之前，等源流水线阶段完成后，将其缓存中需要同步的数据类型写入显存（确保可见性）
 		    .dstStageMask        = dst_stage_mask,                     // 屏障之后，必须等待的流水线阶段（阻塞）
 		    .dstAccessMask       = dst_access_mask,                    // 屏障之后，目标流水线阶段缓存中的需要同步的数据设置为过期（着色器使用缓存数据时，发现数据过期会自动去显存拉取最新数据，从而完成数据同步）
-		    .oldLayout           = old_layout,                         // 图像当前内存布局
+		    .oldLayout           = old_layout,                         // 图像当前内存布局（内存布局就是图像像素的物理排列方式，知道内存布局才知道（x，y）对应的内存地址在哪）
 		    .newLayout           = new_layout,                         // 图像转换后的内存布局
-		    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,            // 源队列族索引（在不同队列之间交换资源所有权）
+		    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,            // 源队列族索引（此处由于是在同一队列族内同步，所以不需要考虑图像所有权在不同队列族间的转移）（对于独占模式的图像，同一时间只能为一个队列族所占有，仅占有它的队列族才能读写，所以此处需要交接图像的所有权）
 		    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,            // 目标队列族索引
-		    .image               = swapChainImages[imageIndex],        // 目标图像
-		    .subresourceRange    =                                     // 图像的哪些部分
+		    .image               = swapChainImages[imageIndex],        // 需要同步的图像
+		    .subresourceRange    =                                     // 图像的哪些部分需要同步
 		    {
-		        .aspectMask     = vk::ImageAspectFlagBits::eColor,        // 图像的哪些层面
-		        .baseMipLevel   = 0,                                      // Mapmap 层级范围
-		        .levelCount     = 1,                                      // Mapmap 层级范围
-		        .baseArrayLayer = 0,                                      // 数组层范围
-		        .layerCount     = 1                                       // 数组层范围
+		        .aspectMask     = vk::ImageAspectFlagBits::eColor,        // 图像的哪些图层需要同步
+		        .baseMipLevel   = 0,                                      // Mipmap 起始层（需要同步的 Mapmap 层级范围）
+		        .levelCount     = 1,                                      // 从起点开始，连续选中多少层 Mipmap
+		        .baseArrayLayer = 0,                                      // 纹理数组起始层（需要同步的纹理数组范围）
+		        .layerCount     = 1                                       // 从起点开始，连续选中多少层纹理
 		    }};
 
 		vk::DependencyInfo dependency_info = {
-		    .dependencyFlags         = {},
-		    .imageMemoryBarrierCount = 1,
-		    .pImageMemoryBarriers    = &barrier};
+		    .dependencyFlags         = {},             // 默认是全局依赖（需要等待源阶段将整个图像要同步的数据处理完），也可以选区域性依赖（移动端优化，只要源阶段将图形某位置处理完了，目标阶段就可以立即处理这个位置，无需等待源阶段将所有位置处理完）
+		    .imageMemoryBarrierCount = 1,              // 图像内存屏障数量
+		    .pImageMemoryBarriers    = &barrier        // 图像内存屏障（数组）起始地址
+		};
 
 		commandBuffer.pipelineBarrier2(dependency_info);
 	}
