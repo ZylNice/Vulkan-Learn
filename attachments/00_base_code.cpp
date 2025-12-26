@@ -402,7 +402,7 @@ class HelloTriangleApplication
 		commandBuffer = std::move(vk::raii::CommandBuffers(device, allocInfo).front());        // CommandBuffers 函数返回的是命令缓冲数组，需要提取其中的首个命令缓冲元素
 	}
 
-	void recordCommand(uint32_t imageIndex)
+	void recordCommandBuffer(uint32_t imageIndex)
 	{
 		commandBuffer.begin({});        // 开始录制命令
 
@@ -514,6 +514,24 @@ class HelloTriangleApplication
 
 	void drawFrame()
 	{
+		queue.waitIdle();        // 强制 CPU 等待，直到图形队列中所有操作完成
+
+		auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemphore, nullptr);        // 告诉 GPU 图像获取完成
+
+		recordCommandBuffer(imageIndex);        // 命令缓冲
+
+		device.resetFences(*drawFence);        // 手动重置栅栏为 Unsignaled 状态
+
+		vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+
+		const vk::SubmitInfo submitInfo{
+		    .waitSemaphoreCount   = 1,
+		    .pWaitSemaphores      = &*presentCompleteSemphore,
+		    .pWaitDstStageMask    = &waitDestinationStageMask,
+		    .commandBufferCount   = 1,
+		    .pCommandBuffers      = &*commandBuffer,
+		    .signalSemaphoreCount = 1,
+		    .pSignalSemaphores    = &*renderFinishedSemphore};
 	}
 
 	[[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char> &code) const
