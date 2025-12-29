@@ -245,10 +245,10 @@ class HelloTriangleApplication
 
 		// 配置特性链
 		vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain = {
-		    {},                                     // 基础特性
-		    {.shaderDrawParameters = true},         // 获取 gl_BaseVertex 访问能力（shader 中的 SV_VertexID = gl_VertexIndex - gl_BaseVertex，仅 gl_VertexIndex 常驻）
-		    {.dynamicRendering = true},             // 开启动态渲染
-		    {.extendedDynamicState = true}};        // 开启扩展动态状态
+		    {},                                                          // 基础特性
+		    {.shaderDrawParameters = true},                              // 获取 gl_BaseVertex 访问能力（shader 中的 SV_VertexID = gl_VertexIndex - gl_BaseVertex，仅 gl_VertexIndex 常驻）
+		    {.synchronization2 = true, .dynamicRendering = true},        // 开启动态渲染
+		    {.extendedDynamicState = true}};                             // 开启扩展动态状态
 
 		float                     queuePriority = 0.5f;        // 队列优先级(0 ~ 1)
 		vk::DeviceQueueCreateInfo deviceQueueCreateInfo{       // 队列创建信息
@@ -451,6 +451,8 @@ class HelloTriangleApplication
 		                                swapChainExtent            // 裁剪矩形宽高
 		                                ));
 
+		commandBuffer.draw(3, 1, 0, 0);
+
 		commandBuffer.endRendering();        // 结束动态渲染
 
 		// 转换图像的布局
@@ -514,9 +516,13 @@ class HelloTriangleApplication
 
 	void drawFrame()
 	{
-		queue.waitIdle();        // 强制 CPU 等待，直到图形队列中所有操作完成
+		queue.waitIdle();        // 强制 CPU 等待，直到该（此处为图形）队列空闲（所有命令执行完毕）
 
-		auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemphore, nullptr);        // 告诉 GPU 图像获取完成
+		auto [result, imageIndex] = swapChain.acquireNextImage(        // 向交换链请求一张即将空闲的画布
+		    UINT64_MAX,                                                // 等待时间（此处表示等待时间无限长）（三缓冲+邮箱：本质是非阻塞调用，传统垂直同步：画满了后会阻塞）
+		    *presentCompleteSemphore,                                  // 异步操作，返回后，当图片真正空闲时触发 presentCompleteSemphore 信号量
+		    nullptr                                                    // 可填写栅栏，让 CPU 也感知到图片准备好了
+		);
 
 		recordCommandBuffer(imageIndex);        // 命令缓冲
 
@@ -526,12 +532,39 @@ class HelloTriangleApplication
 
 		const vk::SubmitInfo submitInfo{
 		    .waitSemaphoreCount   = 1,
-		    .pWaitSemaphores      = &*presentCompleteSemphore,
+		    .pWaitSemaphores      = &*presentCompleteSemphore,        // GPU 等待，直到图像被获取
 		    .pWaitDstStageMask    = &waitDestinationStageMask,
 		    .commandBufferCount   = 1,
-		    .pCommandBuffers      = &*commandBuffer,
+		    .pCommandBuffers      = &*commandBuffer,        // 提交刚刚记录的缓冲
 		    .signalSemaphoreCount = 1,
-		    .pSignalSemaphores    = &*renderFinishedSemphore};
+		    .pSignalSemaphores    = &*renderFinishedSemphore};        // GPU 信号，渲染完成后触发
+
+		queue.submit(submitInfo, *drawFence);
+
+		result = device.waitForFences(*drawFence, vk::True, UINT64_MAX);        // CPU 等待 GPU 完成
+		if (result != vk::Result::eSuccess)
+		{
+			throw std::runtime_error("failed to wait for fence!");
+		}
+
+		const vk::PresentInfoKHR presentInfoKHR{
+		    .waitSemaphoreCount = 1,
+		    .pWaitSemaphores    = &*renderFinishedSemphore,
+		    .swapchainCount     = 1,
+		    .pSwapchains        = &*swapChain,
+		    .pImageIndices      = &imageIndex};
+		result = queue.presentKHR(presentInfoKHR);
+
+		switch (result)
+		{
+			case vk::Result::eSuccess:
+				break;
+			case vk::Result::eSuboptimalKHR:
+				std::cout << "vk::Queue::presentKHR returned vk::Result::eSuboptimalKHR !\n";
+				break;
+			default:
+				break;
+		}
 	}
 
 	[[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char> &code) const
