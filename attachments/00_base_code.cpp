@@ -518,7 +518,7 @@ class HelloTriangleApplication
 	{
 		queue.waitIdle();        // 强制 CPU 等待，直到该（此处为图形）队列空闲（所有命令执行完毕）
 
-		auto [result, imageIndex] = swapChain.acquireNextImage(        // 向交换链请求一张即将空闲的画布
+		auto [result, imageIndex] = swapChain.acquireNextImage(        // 向交换链请求一张空闲的画布（非空闲的画布只代表被 GPU 或显示器占用，不一定代表已绘制完成）
 		    UINT64_MAX,                                                // 等待时间（此处表示等待时间无限长）（三缓冲+邮箱：本质是非阻塞调用，传统垂直同步：画满了后会阻塞）
 		    *presentCompleteSemphore,                                  // 异步操作，返回后，当图片真正空闲时触发 presentCompleteSemphore 信号量
 		    nullptr                                                    // 可填写栅栏，让 CPU 也感知到图片准备好了
