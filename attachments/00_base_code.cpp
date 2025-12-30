@@ -78,16 +78,16 @@ class HelloTriangleApplication
 		glfwInit();        // 初始化 glfw 库
 
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);        // 不要创建 OpenGL 上下文
-		glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);          // 禁止窗口改变大小（暂时禁止，因为这处理起来有些复杂）
+		glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);           // 禁止窗口改变大小（暂时禁止，因为这处理起来有些复杂）
 
 		window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);        // 创建窗口，返回窗口指针 (宽, 高, 标题, 显示器, 共享资源)
-		glfwSetWindowUserPointer(window, this);
+		glfwSetWindowUserPointer(window, this);                                      // 将当前类对象指针传入 window
 		glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
 	}
 
 	static void framebufferResizeCallback(GLFWwindow *window, int width, int height)
 	{
-		auto app                = reinterpret_cast<HelloTriangleApplication *>(glfwGetWindowUserPointer(window));
+		auto app                = reinterpret_cast<HelloTriangleApplication *>(glfwGetWindowUserPointer(window));        // 从 window 中取出当前类对象指针
 		app->framebufferResized = true;
 	}
 
@@ -127,13 +127,13 @@ class HelloTriangleApplication
 	{
 		int width = 0, height = 0;
 		glfwGetFramebufferSize(window, &width, &height);
-		while (width == 0 || height == 0)        // 如果是窗口最小化，则进入循环
+		while (width == 0 || height == 0)        // 如果是窗口最小化，则进入循环（创建交换链时，图片尺寸不允许为 0）
 		{
-			glfwGetFramebufferSize(window, &width, &height);
 			glfwWaitEvents();        // 线程休眠，等待事件触发
+			glfwGetFramebufferSize(window, &width, &height);
 		}
 
-		device.waitIdle();
+		device.waitIdle();        // 确保清除交换链前，GPU 已经不再使用交换链中的图片
 
 		cleanupSwapChain();
 		createSwapChain();
@@ -142,8 +142,8 @@ class HelloTriangleApplication
 
 	void cleanupSwapChain()
 	{
-		swapChainImageViews.clear();
-		swapChain = nullptr;        // 销毁旧的交换链
+		swapChainImageViews.clear();        // 清空旧的 imageView
+		swapChain = nullptr;                // 通过 RAII 销毁旧的交换链
 	}
 
 	void createInstance()
@@ -575,7 +575,6 @@ class HelloTriangleApplication
 		    *presentCompleteSemphores[frameIndex],                     // 异步操作，返回后，当图片真正可用时触发信号量（返回时逻辑上交割完毕，还需等待硬件上的交割完毕）
 		    nullptr                                                    // 可填写栅栏，让 CPU 也感知到图片准备好了
 		);
-
 		if (result == vk::Result::eErrorOutOfDateKHR)
 		{
 			recreateSwapChain();
@@ -611,7 +610,8 @@ class HelloTriangleApplication
 			    .pSwapchains        = &*swapChain,
 			    .pImageIndices      = &imageIndex};        // 要展示的图片
 			result = queue.presentKHR(presentInfoKHR);
-			if (result == vk::Result::eSuboptimalKHR || framebufferResized)
+			if (result == vk::Result::eSuboptimalKHR || framebufferResized)        // eSuboptimalKHR 表示交换链能用，但和当前窗口不完全匹配（如分辨率不同，但可拉伸），
+			                                                                       // framebufferResized，在某些驱动上，改变窗口大小时可能仍返回 eSuccess，因为驱动通过自动缩放交换链图像以适应窗口尺寸
 			{
 				framebufferResized = false;
 				recreateSwapChain();
@@ -620,21 +620,10 @@ class HelloTriangleApplication
 			{
 				throw std::runtime_error("failed to present swap chain image!");
 			}
-
-			// switch (result)
-			//{
-			//	case vk::Result::eSuccess:
-			//		break;
-			//	case vk::Result::eSuboptimalKHR:
-			//		std::cout << "vk::Queue::presentKHR returned vk::Result::eSuboptimalKHR !\n";
-			//		break;
-			//	default:
-			//		break;
-			// }
 		}
 		catch (const vk::SystemError &e)
 		{
-			if (e.code().value() == static_cast<int>(vk::Result::eErrorOutOfDateKHR))
+			if (e.code().value() == static_cast<int>(vk::Result::eErrorOutOfDateKHR))        // 交换链彻底失效，需要重建
 			{
 				recreateSwapChain();
 				return;
