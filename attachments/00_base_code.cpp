@@ -65,6 +65,8 @@ class HelloTriangleApplication
 	std::vector<vk::raii::Fence>     inFlightFences;                  // CPU 等待 GPU 完成的栅栏
 	uint32_t                         frameIndex = 0;                  // 当前帧索引（0 或 1）
 
+	bool framebufferResized = false;        // 窗口大小是否改变的标记
+
 	std::vector<const char *> requiredDeviceExtension = {        // 需要的物理设备拓展
 	    vk::KHRSwapchainExtensionName,
 	    vk::KHRSpirv14ExtensionName,
@@ -76,9 +78,17 @@ class HelloTriangleApplication
 		glfwInit();        // 初始化 glfw 库
 
 		glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);        // 不要创建 OpenGL 上下文
-		glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);          // 禁止窗口改变大小（暂时禁止，因为这处理起来有些复杂）
+		glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);          // 禁止窗口改变大小（暂时禁止，因为这处理起来有些复杂）
 
 		window = glfwCreateWindow(WIDTH, HEIGHT, "Vulkan", nullptr, nullptr);        // 创建窗口，返回窗口指针 (宽, 高, 标题, 显示器, 共享资源)
+		glfwSetWindowUserPointer(window, this);
+		glfwSetFramebufferSizeCallback(window, framebufferResizeCallback);
+	}
+
+	static void framebufferResizeCallback(GLFWwindow *window, int width, int height)
+	{
+		auto app                = reinterpret_cast<HelloTriangleApplication *>(glfwGetWindowUserPointer(window));
+		app->framebufferResized = true;
 	}
 
 	void initVulkan()
@@ -111,6 +121,29 @@ class HelloTriangleApplication
 		glfwDestroyWindow(window);        // 销毁窗口
 
 		glfwTerminate();        // 清理 glfw 资源
+	}
+
+	void recreateSwapChain()
+	{
+		int width = 0, height = 0;
+		glfwGetFramebufferSize(window, &width, &height);
+		while (width == 0 || height == 0)        // 如果是窗口最小化，则进入循环
+		{
+			glfwGetFramebufferSize(window, &width, &height);
+			glfwWaitEvents();        // 线程休眠，等待事件触发
+		}
+
+		device.waitIdle();
+
+		cleanupSwapChain();
+		createSwapChain();
+		createImageViews();
+	}
+
+	void cleanupSwapChain()
+	{
+		swapChainImageViews.clear();
+		swapChain = nullptr;        // 销毁旧的交换链
 	}
 
 	void createInstance()
@@ -529,7 +562,7 @@ class HelloTriangleApplication
 
 	void drawFrame()
 	{
-		auto fenceResult = device.waitForFences(*inFlightFences[frameIndex], vk::True, UINT64_MAX);  //确保当前工作帧的上一帧的所有 GPU 工作已完成（不代表渲染结果已经被呈现）
+		auto fenceResult = device.waitForFences(*inFlightFences[frameIndex], vk::True, UINT64_MAX);        // 确保当前工作帧的上一帧的所有 GPU 工作已完成（不代表渲染结果已经被呈现）
 		if (fenceResult != vk::Result::eSuccess)
 		{
 			throw std::runtime_error("failed to wait for fence!");
@@ -543,8 +576,17 @@ class HelloTriangleApplication
 		    nullptr                                                    // 可填写栅栏，让 CPU 也感知到图片准备好了
 		);
 
-		commandBuffers[frameIndex].reset();
+		if (result == vk::Result::eErrorOutOfDateKHR)
+		{
+			recreateSwapChain();
+			return;
+		}
+		if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR)
+		{
+			throw std::runtime_error("failed to acquire swap chain image!");
+		}
 
+		commandBuffers[frameIndex].reset();
 		recordCommandBuffer(imageIndex);        // 转为写入布局-绑定渲染目标--绘制图形-转为呈现布局
 
 		vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
@@ -560,25 +602,48 @@ class HelloTriangleApplication
 
 		queue.submit(submitInfo, *inFlightFences[frameIndex]);        // 提交命令，GPU 执行完毕后触发信号量（CPU）
 
-		const vk::PresentInfoKHR presentInfoKHR{
-		    .waitSemaphoreCount = 1,
-		    .pWaitSemaphores    = &*renderFinishedSemphores[imageIndex],        // 等待该信号量被触发（渲染完成）
-		    .swapchainCount     = 1,
-		    .pSwapchains        = &*swapChain,
-		    .pImageIndices      = &imageIndex};        // 要展示的图片
-		result = queue.presentKHR(presentInfoKHR);
-
-		switch (result)
+		try
 		{
-			case vk::Result::eSuccess:
-				break;
-			case vk::Result::eSuboptimalKHR:
-				std::cout << "vk::Queue::presentKHR returned vk::Result::eSuboptimalKHR !\n";
-				break;
-			default:
-				break;
-		}
+			const vk::PresentInfoKHR presentInfoKHR{
+			    .waitSemaphoreCount = 1,
+			    .pWaitSemaphores    = &*renderFinishedSemphores[imageIndex],        // 等待该信号量被触发（渲染完成）
+			    .swapchainCount     = 1,
+			    .pSwapchains        = &*swapChain,
+			    .pImageIndices      = &imageIndex};        // 要展示的图片
+			result = queue.presentKHR(presentInfoKHR);
+			if (result == vk::Result::eSuboptimalKHR || framebufferResized)
+			{
+				framebufferResized = false;
+				recreateSwapChain();
+			}
+			else if (result != vk::Result::eSuccess)
+			{
+				throw std::runtime_error("failed to present swap chain image!");
+			}
 
+			// switch (result)
+			//{
+			//	case vk::Result::eSuccess:
+			//		break;
+			//	case vk::Result::eSuboptimalKHR:
+			//		std::cout << "vk::Queue::presentKHR returned vk::Result::eSuboptimalKHR !\n";
+			//		break;
+			//	default:
+			//		break;
+			// }
+		}
+		catch (const vk::SystemError &e)
+		{
+			if (e.code().value() == static_cast<int>(vk::Result::eErrorOutOfDateKHR))
+			{
+				recreateSwapChain();
+				return;
+			}
+			else
+			{
+				throw;
+			}
+		}
 		frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
 	}
 
