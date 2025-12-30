@@ -518,28 +518,28 @@ class HelloTriangleApplication
 	{
 		queue.waitIdle();        // 强制 CPU 等待，直到该（此处为图形）队列空闲（所有命令执行完毕）
 
-		auto [result, imageIndex] = swapChain.acquireNextImage(        // 向交换链请求一张空闲的画布（非空闲的画布只代表被 GPU 或显示器占用，不一定代表已绘制完成）
+		auto [result, imageIndex] = swapChain.acquireNextImage(        // 向交换链请求一张空闲的画布（非空闲的画布可能被 GPU 或显示器占用，有可能正在绘制或显示）
 		    UINT64_MAX,                                                // 等待时间（此处表示等待时间无限长）（三缓冲+邮箱：本质是非阻塞调用，传统垂直同步：画满了后会阻塞）
-		    *presentCompleteSemphore,                                  // 异步操作，返回后，当图片真正空闲时触发 presentCompleteSemphore 信号量
+		    *presentCompleteSemphore,                                  // 异步操作，返回后，当图片真正可用时触发信号量（返回时逻辑上交割完毕，还需等待硬件上的交割完毕）
 		    nullptr                                                    // 可填写栅栏，让 CPU 也感知到图片准备好了
 		);
 
-		recordCommandBuffer(imageIndex);        // 命令缓冲
+		recordCommandBuffer(imageIndex);        // 转为写入布局-绑定渲染目标--绘制图形-转为呈现布局
 
-		device.resetFences(*drawFence);        // 手动重置栅栏为 Unsignaled 状态
+		device.resetFences(*drawFence);        // 手动将栅栏重置为 Unsignaled 状态
 
 		vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
 
 		const vk::SubmitInfo submitInfo{
 		    .waitSemaphoreCount   = 1,
-		    .pWaitSemaphores      = &*presentCompleteSemphore,        // GPU 等待，直到图像被获取
-		    .pWaitDstStageMask    = &waitDestinationStageMask,
+		    .pWaitSemaphores      = &*presentCompleteSemphore,        // GPU 在等待哪个信号量被触发（此处为 presentCompleteSemphore）
+		    .pWaitDstStageMask    = &waitDestinationStageMask,       // GPU 在哪个流水线阶段等待（此处 GPU 可以执行顶点着色器、片元输出颜色计算，但颜色输出阶段必须停下来等待信号量被触发）
 		    .commandBufferCount   = 1,
-		    .pCommandBuffers      = &*commandBuffer,        // 提交刚刚记录的缓冲
+		    .pCommandBuffers      = &*commandBuffer,        // GPU 执行哪个命令缓冲区的命令
 		    .signalSemaphoreCount = 1,
-		    .pSignalSemaphores    = &*renderFinishedSemphore};        // GPU 信号，渲染完成后触发
+		    .pSignalSemaphores    = &*renderFinishedSemphore};        // GPU 执行完命令后，触发哪个信号量（GPU）
 
-		queue.submit(submitInfo, *drawFence);
+		queue.submit(submitInfo, *drawFence); // 提交命令，GPU 执行完毕后触发 drawFence 信号量（CPU）
 
 		result = device.waitForFences(*drawFence, vk::True, UINT64_MAX);        // CPU 等待 GPU 完成
 		if (result != vk::Result::eSuccess)
@@ -549,10 +549,10 @@ class HelloTriangleApplication
 
 		const vk::PresentInfoKHR presentInfoKHR{
 		    .waitSemaphoreCount = 1,
-		    .pWaitSemaphores    = &*renderFinishedSemphore,
+		    .pWaitSemaphores    = &*renderFinishedSemphore, // 等待该信号量被触发（渲染完成）
 		    .swapchainCount     = 1,
 		    .pSwapchains        = &*swapChain,
-		    .pImageIndices      = &imageIndex};
+		    .pImageIndices      = &imageIndex}; // 要展示的图片
 		result = queue.presentKHR(presentInfoKHR);
 
 		switch (result)
