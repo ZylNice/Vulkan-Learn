@@ -16,8 +16,9 @@ import vulkan_hpp;
 #define GLFW_INCLUDE_VULKAN        // 导入 glfwCreateWindowSurface 函数（条件编译 glfw3.h）
 #include <GLFW/glfw3.h>
 
-const uint32_t WIDTH  = 800;
-const uint32_t HEIGHT = 600;
+const uint32_t WIDTH                = 800;
+const uint32_t HEIGHT               = 600;
+constexpr int  MAX_FRAMES_IN_FLIGHT = 2;
 
 const std::vector<char const *> validationLayers = {"VK_LAYER_KHRONOS_validation"};
 
@@ -54,14 +55,15 @@ class HelloTriangleApplication
 	vk::Extent2D                     swapChainExtent;               // 交换链中图像分辨率
 	std::vector<vk::raii::ImageView> swapChainImageViews;           // 管线通过 imageview 接口，访问交换链中的图像
 
-	vk::raii::PipelineLayout pipelineLayout   = nullptr;        // 管线布局
-	vk::raii::Pipeline       graphicsPipeline = nullptr;        // 图形管线对象
-	vk::raii::CommandPool    commandPool      = nullptr;        // 命令池，用于分配命令缓冲
-	vk::raii::CommandBuffer  commandBuffer    = nullptr;        // 命令缓冲，用于记录绘图指令
+	vk::raii::PipelineLayout             pipelineLayout   = nullptr;        // 管线布局
+	vk::raii::Pipeline                   graphicsPipeline = nullptr;        // 图形管线对象
+	vk::raii::CommandPool                commandPool      = nullptr;        // 命令池，用于分配命令缓冲
+	std::vector<vk::raii::CommandBuffer> commandBuffers;                    // 命令缓冲，用于记录绘图指令
 
-	vk::raii::Semaphore presentCompleteSemphore = nullptr;        // 图像获取完成信号（GPU内）
-	vk::raii::Semaphore renderFinishedSemphore  = nullptr;        // 渲染完成信号（GPU内）
-	vk::raii::Fence     drawFence               = nullptr;        // CPU 等待 GPU 完成的栅栏
+	std::vector<vk::raii::Semaphore> presentCompleteSemphores;        // 图像获取完成信号（GPU内）
+	std::vector<vk::raii::Semaphore> renderFinishedSemphores;         // 渲染完成信号（GPU内）
+	std::vector<vk::raii::Fence>     inFlightFences;                  // CPU 等待 GPU 完成的栅栏
+	uint32_t                         frameIndex = 0;                  // 当前帧索引（0 或 1）
 
 	std::vector<const char *> requiredDeviceExtension = {        // 需要的物理设备拓展
 	    vk::KHRSwapchainExtensionName,
@@ -397,13 +399,14 @@ class HelloTriangleApplication
 		vk::CommandBufferAllocateInfo allocInfo{
 		    .commandPool        = commandPool,                             // 从哪个命令池分配命令缓冲
 		    .level              = vk::CommandBufferLevel::ePrimary,        // 主要缓冲，可以直接提交给队列执行
-		    .commandBufferCount = 1                                        // 仅分配一个命令缓冲
+		    .commandBufferCount = MAX_FRAMES_IN_FLIGHT                     // 分配(两个)命令缓冲
 		};
-		commandBuffer = std::move(vk::raii::CommandBuffers(device, allocInfo).front());        // CommandBuffers 函数返回的是命令缓冲数组，需要提取其中的首个命令缓冲元素
+		commandBuffers = vk::raii::CommandBuffers(device, allocInfo);        // CommandBuffers 函数返回的是命令缓冲数组
 	}
 
 	void recordCommandBuffer(uint32_t imageIndex)
 	{
+		auto &commandBuffer = commandBuffers[frameIndex];
 		commandBuffer.begin({});        // 开始录制命令
 
 		transition_image_layout(        // 设置管线屏障，这里是对图像内存布局转化做同步
@@ -504,55 +507,65 @@ class HelloTriangleApplication
 		    .pImageMemoryBarriers    = &barrier        // 图像内存屏障（数组）起始地址
 		};
 
-		commandBuffer.pipelineBarrier2(dependency_info);
+		commandBuffers[frameIndex].pipelineBarrier2(dependency_info);
 	}
 
 	void createSyncObjects()
 	{
-		presentCompleteSemphore = vk::raii::Semaphore(device, vk::SemaphoreCreateInfo());                        // 二值信号量（默认创建信息）
-		renderFinishedSemphore  = vk::raii::Semaphore(device, vk::SemaphoreCreateInfo());                        // 二值信号量（默认创建信息）
-		drawFence               = vk::raii::Fence(device, {.flags = vk::FenceCreateFlagBits::eSignaled});        // 初始栅栏是已触发状态（如果初始是未触发，会导致第一帧死锁）
+		assert(presentCompleteSemphores.empty() && renderFinishedSemphores.empty() && inFlightFences.empty());
+
+		for (size_t i = 0; i < swapChainImages.size(); i++)        // 为每个交换链图像创建一个渲染完成信号量
+		{
+			renderFinishedSemphores.emplace_back(device, vk::SemaphoreCreateInfo());        // 某图像，已渲染完且可被显示信号（二值信号量）
+		}
+
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)        // 为每一帧创建同步对象
+		{
+			presentCompleteSemphores.emplace_back(device, vk::SemaphoreCreateInfo());        // 某工作帧，图像获取完成信号（二值信号量）
+
+			inFlightFences.emplace_back(device, vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});        // 某工作帧，所有工作完成标志（初始栅栏必须是已触发状态，否则会导致第一帧死锁）
+		}
 	}
 
 	void drawFrame()
 	{
-		queue.waitIdle();        // 强制 CPU 等待，直到该（此处为图形）队列空闲（所有命令执行完毕）
+		auto fenceResult = device.waitForFences(*inFlightFences[frameIndex], vk::True, UINT64_MAX);  //确保当前工作帧的上一帧的所有 GPU 工作已完成（不代表渲染结果已经被呈现）
+		if (fenceResult != vk::Result::eSuccess)
+		{
+			throw std::runtime_error("failed to wait for fence!");
+		}
+
+		device.resetFences(*inFlightFences[frameIndex]);        // 手动将栅栏重置为 Unsignaled 状态（表示当前帧工作处于未完成状态）
 
 		auto [result, imageIndex] = swapChain.acquireNextImage(        // 向交换链请求一张空闲的画布（非空闲的画布可能被 GPU 或显示器占用，有可能正在绘制或显示）
 		    UINT64_MAX,                                                // 等待时间（此处表示等待时间无限长）（三缓冲+邮箱：本质是非阻塞调用，传统垂直同步：画满了后会阻塞）
-		    *presentCompleteSemphore,                                  // 异步操作，返回后，当图片真正可用时触发信号量（返回时逻辑上交割完毕，还需等待硬件上的交割完毕）
+		    *presentCompleteSemphores[frameIndex],                     // 异步操作，返回后，当图片真正可用时触发信号量（返回时逻辑上交割完毕，还需等待硬件上的交割完毕）
 		    nullptr                                                    // 可填写栅栏，让 CPU 也感知到图片准备好了
 		);
 
-		recordCommandBuffer(imageIndex);        // 转为写入布局-绑定渲染目标--绘制图形-转为呈现布局
+		commandBuffers[frameIndex].reset();
 
-		device.resetFences(*drawFence);        // 手动将栅栏重置为 Unsignaled 状态
+		recordCommandBuffer(imageIndex);        // 转为写入布局-绑定渲染目标--绘制图形-转为呈现布局
 
 		vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
 
 		const vk::SubmitInfo submitInfo{
 		    .waitSemaphoreCount   = 1,
-		    .pWaitSemaphores      = &*presentCompleteSemphore,        // GPU 在等待哪个信号量被触发（此处为 presentCompleteSemphore）
-		    .pWaitDstStageMask    = &waitDestinationStageMask,       // GPU 在哪个流水线阶段等待（此处 GPU 可以执行顶点着色器、片元输出颜色计算，但颜色输出阶段必须停下来等待信号量被触发）
+		    .pWaitSemaphores      = &*presentCompleteSemphores[frameIndex],        // GPU 在等待哪个信号量被触发（此处为 presentCompleteSemphore）
+		    .pWaitDstStageMask    = &waitDestinationStageMask,                     // GPU 在哪个流水线阶段等待（此处 GPU 可以执行顶点着色器、片元输出颜色计算，但颜色输出阶段必须停下来等待信号量被触发）
 		    .commandBufferCount   = 1,
-		    .pCommandBuffers      = &*commandBuffer,        // GPU 执行哪个命令缓冲区的命令
+		    .pCommandBuffers      = &*commandBuffers[frameIndex],        // GPU 执行哪个命令缓冲区的命令
 		    .signalSemaphoreCount = 1,
-		    .pSignalSemaphores    = &*renderFinishedSemphore};        // GPU 执行完命令后，触发哪个信号量（GPU）
+		    .pSignalSemaphores    = &*renderFinishedSemphores[imageIndex]};        // GPU 执行完命令后，触发哪个信号量（GPU）
 
-		queue.submit(submitInfo, *drawFence); // 提交命令，GPU 执行完毕后触发 drawFence 信号量（CPU）
-
-		result = device.waitForFences(*drawFence, vk::True, UINT64_MAX);        // CPU 等待 GPU 完成
-		if (result != vk::Result::eSuccess)
-		{
-			throw std::runtime_error("failed to wait for fence!");
-		}
+		queue.submit(submitInfo, *inFlightFences[frameIndex]);        // 提交命令，GPU 执行完毕后触发信号量（CPU）
 
 		const vk::PresentInfoKHR presentInfoKHR{
 		    .waitSemaphoreCount = 1,
-		    .pWaitSemaphores    = &*renderFinishedSemphore, // 等待该信号量被触发（渲染完成）
+		    .pWaitSemaphores    = &*renderFinishedSemphores[imageIndex],        // 等待该信号量被触发（渲染完成）
 		    .swapchainCount     = 1,
 		    .pSwapchains        = &*swapChain,
-		    .pImageIndices      = &imageIndex}; // 要展示的图片
+		    .pImageIndices      = &imageIndex};        // 要展示的图片
 		result = queue.presentKHR(presentInfoKHR);
 
 		switch (result)
@@ -565,6 +578,8 @@ class HelloTriangleApplication
 			default:
 				break;
 		}
+
+		frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
 	}
 
 	[[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char> &code) const
