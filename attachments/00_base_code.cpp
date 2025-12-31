@@ -47,8 +47,8 @@ struct Vertex
 	{
 		return {
 		    vk::VertexInputAttributeDescription(        // 位置属性
-		        0,                                      // 绑定索引（binding，对应绑定描述）
 		        0,                                      // 位置（location，对应着色器中的 layout(location = 0))
+		        0,                                      // 绑定索引（binding，对应绑定描述）
 		        vk::Format::eR32G32Sfloat,              // (对应 float2）
 		        offsetof(Vertex, pos)                   // 自动计算 pos 成员在结构体中的偏移量
 		        ),
@@ -407,7 +407,7 @@ class HelloTriangleApplication
 		auto                                   attributeDescriptions = Vertex::getAttributeDescriptions();
 		vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
 		    .vertexBindingDescriptionCount   = 1,
-		    .pVertexBindingDescriptions      = &bindingDescription,        // 绑定描述指针
+		    .pVertexBindingDescriptions      = &bindingDescription,        // 绑定描述指针（一个绑定点对应一个缓冲区）
 		    .vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size()),
 		    .pVertexAttributeDescriptions    = attributeDescriptions.data()        // 属性描述指针
 		};
@@ -496,30 +496,30 @@ class HelloTriangleApplication
 
 		vertexBuffer = vk::raii::Buffer(device, bufferInfo);        // 创建缓冲区句柄（仅创建了缓冲区的“元数据”对象，未分配实际显存）
 
-		vk::MemoryRequirements memRequirements = vertexBuffer.getMemoryRequirements();        // 缓冲区在显存/内存中的对齐要求、真实大小、支持的内存类型（缓冲区数据在内存和显存中的二进制格式是完全相同的，所以内存类型的限制往往是硬件上的制约）
+		vk::MemoryRequirements memRequirements = vertexBuffer.getMemoryRequirements();        // 缓冲区在显存/内存中（考虑内存对齐后）的真实大小、可用的内存类型（由显卡决定，一定能得是显卡有的）（缓冲区数据在内存和显存中的二进制格式是完全相同的，所以内存类型的限制往往是硬件上的制约）
 
 		vk::MemoryAllocateInfo memoryAllocateInfo        // 查找并分配显存
 		    {
 		        .allocationSize  = memRequirements.size,        // 缓冲区实际要分配的字节数（由于内存对齐，可能比 bufferInfo.size 要大)
 		        .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits,
-		                                          vk::MemoryPropertyFlagBits::eHostVisible |           // CPU 可访问
-		                                              vk::MemoryPropertyFlagBits::eHostCoherent        // 主机一致性
+		                                          vk::MemoryPropertyFlagBits::eHostVisible |           // 这块内存/显存可被 CPU(Host) 访问（对内存类型的额外要求）
+		                                              vk::MemoryPropertyFlagBits::eHostCoherent        // CPU 写入后会自动将缓存同步到内存/显存，确保 GPU 能看到（对内存类型的额外要求）
 		                                          )};
 
-		vertexBufferMemory = vk::raii::DeviceMemory(device, memoryAllocateInfo);
+		vertexBufferMemory = vk::raii::DeviceMemory(device, memoryAllocateInfo);        // 分配实际显存
 
 		vertexBuffer.bindMemory(*vertexBufferMemory, 0);        // 将分配的显存绑定到缓冲区句柄
 
-		void *data = vertexBufferMemory.mapMemory(0, bufferInfo.size);        // 将顶点数据拷贝到显存
-		memcpy(data, vertices.data(), bufferInfo.size);
-		vertexBufferMemory.unmapMemory();
+		void *data = vertexBufferMemory.mapMemory(0, bufferInfo.size);        // 返回 CPU 可访问的虚拟地址指针，修改页表以建立虚拟地址到显存地址的映射关系（硬件支持）
+		memcpy(data, vertices.data(), bufferInfo.size);                       // 将顶点数据拷贝到显存（通过 PCI-E 总线）
+		vertexBufferMemory.unmapMemory();                                     // 恢复页表，终止虚拟地址到显存地址的映射关系
 	}
 
 	uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties)        // 根据过滤器和属性查找适合的内存类型索引
 	{
 		vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();        // 获取显卡所有内存堆和内存类型的信息
 
-		for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)        // 遍历所有可用的内存类型
+		for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)        // 遍历显卡支持的内存类型（理论上可以直接用极客写法，仅遍历 buffer 要求的内存类型，但可读性和兼容性都差）
 		{
 			if ((typeFilter & (1 << i)) &&                                                     // 检查 Buffer 是否支持第 i 种内存类型
 			    (memProperties.memoryTypes[i].propertyFlags & properties) == properties        // 检查第 i 种内存类型是否包含了我们需要的所有属性
@@ -592,10 +592,14 @@ class HelloTriangleApplication
 		                                swapChainExtent            // 裁剪矩形宽高
 		                                ));
 
-		commandBuffer.bindVertexBuffers(0, *vertexBuffer, {0});
+		commandBuffer.bindVertexBuffers(
+		    0,        // buffer 的 0 号绑定点（binding）
+		    *vertexBuffer,
+		    {0}        // 从 buffer 的第 0 个字节开始读
+		);
 
-		commandBuffer.draw(3, 1, 0, 0);
-		// commandBuffer.draw(vertices.size(), 1, 0, 0);
+		// commandBuffer.draw(3, 1, 0, 0);
+		commandBuffer.draw(vertices.size(), 1, 0, 0);
 
 		commandBuffer.endRendering();        // 结束动态渲染
 
