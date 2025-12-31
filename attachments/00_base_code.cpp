@@ -15,6 +15,7 @@ import vulkan_hpp;
 
 #define GLFW_INCLUDE_VULKAN        // µ¼Èë glfwCreateWindowSurface º¯Êı£¨Ìõ¼ş±àÒë glfw3.h£©
 #include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
 
 const uint32_t WIDTH                = 800;
 const uint32_t HEIGHT               = 600;
@@ -27,6 +28,52 @@ constexpr bool enableValidationLayers = false;        // ·¢²¼Ê±¹Ø±ÕÑéÖ¤²ã£¬±£Ö¤Ğ
 #else
 constexpr bool enableValidationLayers = true;
 #endif
+
+struct Vertex
+{
+	glm::vec2 pos;
+	glm::vec3 color;
+
+	static vk::VertexInputBindingDescription getBindingDescription()        // °ó¶¨ÃèÊö£¨ÈçºÎ¶ÁÈ¡Ò»¸ö¶¥µã£©
+	{
+		return {
+		    0,                                  // °ó¶¨Ë÷Òı£¨binding£©
+		    sizeof(Vertex),                     // Ã¿¸ö¶¥µãÊı¾İµÄ×Ö½Ú¿ç¶È
+		    vk::VertexInputRate::eVertex        // Êı¾İ¸üĞÂÆµÂÊ£¨Öğ¶¥µã/ÖğÊµÀı£¨ÊµÀı»¯£©£©
+		};
+	}
+
+	static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDescriptions()        // ÊôĞÔÃèÊö£¨ÈçºÎ¶ÁÈ¡Ò»¸ö¶¥µãÖĞµÄ¾ßÌåÊôĞÔ£©
+	{
+		return {
+		    vk::VertexInputAttributeDescription(        // Î»ÖÃÊôĞÔ
+		        0,                                      // °ó¶¨Ë÷Òı£¨binding£¬¶ÔÓ¦°ó¶¨ÃèÊö£©
+		        0,                                      // Î»ÖÃ£¨location£¬¶ÔÓ¦×ÅÉ«Æ÷ÖĞµÄ layout(location = 0))
+		        vk::Format::eR32G32Sfloat,              // (¶ÔÓ¦ float2£©
+		        offsetof(Vertex, pos)                   // ×Ô¶¯¼ÆËã pos ³ÉÔ±ÔÚ½á¹¹ÌåÖĞµÄÆ«ÒÆÁ¿
+		        ),
+		    vk::VertexInputAttributeDescription(        // ÑÕÉ«ÊôĞÔ
+		        1,
+		        0,
+		        vk::Format::eR32G32B32Sfloat,        // £¨¶ÔÓ¦ float4£©
+		        offsetof(Vertex, color))};
+	}
+};
+
+// const std::vector<Vertex> vertices = {
+//     {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},         // ¶¥µã 1: ºìÉ«
+//     {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},          // ¶¥µã 2: ÂÌÉ«
+//     {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};        // ¶¥µã 3: À¶É«
+
+const std::vector<Vertex> vertices = {
+    {{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
+    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
+
+// const std::vector<Vertex> vertices = {
+//     {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+//     {{0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}},
+//     {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
 
 class HelloTriangleApplication
 {
@@ -55,10 +102,14 @@ class HelloTriangleApplication
 	vk::Extent2D                     swapChainExtent;               // ½»»»Á´ÖĞÍ¼Ïñ·Ö±æÂÊ
 	std::vector<vk::raii::ImageView> swapChainImageViews;           // ¹ÜÏßÍ¨¹ı imageview ½Ó¿Ú£¬·ÃÎÊ½»»»Á´ÖĞµÄÍ¼Ïñ
 
-	vk::raii::PipelineLayout             pipelineLayout   = nullptr;        // ¹ÜÏß²¼¾Ö
-	vk::raii::Pipeline                   graphicsPipeline = nullptr;        // Í¼ĞÎ¹ÜÏß¶ÔÏó
-	vk::raii::CommandPool                commandPool      = nullptr;        // ÃüÁî³Ø£¬ÓÃÓÚ·ÖÅäÃüÁî»º³å
-	std::vector<vk::raii::CommandBuffer> commandBuffers;                    // ÃüÁî»º³å£¬ÓÃÓÚ¼ÇÂ¼»æÍ¼Ö¸Áî
+	vk::raii::PipelineLayout pipelineLayout   = nullptr;        // ¹ÜÏß²¼¾Ö
+	vk::raii::Pipeline       graphicsPipeline = nullptr;        // Í¼ĞÎ¹ÜÏß¶ÔÏó
+
+	vk::raii::Buffer       vertexBuffer       = nullptr;        // ¶¥µã»º³åÇø¾ä±ú£¨ÃèÊö´óĞ¡ºÍÓÃÍ¾£©
+	vk::raii::DeviceMemory vertexBufferMemory = nullptr;        // ¶¥µã»º³åÇøÏÔ´æ¾ä±ú£¨Êµ¼ÊÏÔ´æ£©
+
+	vk::raii::CommandPool                commandPool = nullptr;        // ÃüÁî³Ø£¬ÓÃÓÚ·ÖÅäÃüÁî»º³å
+	std::vector<vk::raii::CommandBuffer> commandBuffers;               // ÃüÁî»º³å£¬ÓÃÓÚ¼ÇÂ¼»æÍ¼Ö¸Áî
 
 	std::vector<vk::raii::Semaphore> presentCompleteSemphores;        // Í¼Ïñ»ñÈ¡Íê³ÉĞÅºÅ£¨GPUÄÚ£©
 	std::vector<vk::raii::Semaphore> renderFinishedSemphores;         // äÖÈ¾Íê³ÉĞÅºÅ£¨GPUÄÚ£©
@@ -102,6 +153,7 @@ class HelloTriangleApplication
 		createImageViews();
 		createGraphicsPipeline();
 		createCommandPool();
+		createVertexBuffer();
 		createCommandBuffer();
 		createSyncObjects();
 	}
@@ -351,7 +403,14 @@ class HelloTriangleApplication
 		vk::PipelineShaderStageCreateInfo fragShaderStageInfo{.stage = vk::ShaderStageFlagBits::eFragment, .module = shaderModule, .pName = "fragMain"};
 		vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
 
-		vk::PipelineVertexInputStateCreateInfo   vertexInputInfo;
+		auto                                   bindingDescription    = Vertex::getBindingDescription();
+		auto                                   attributeDescriptions = Vertex::getAttributeDescriptions();
+		vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
+		    .vertexBindingDescriptionCount   = 1,
+		    .pVertexBindingDescriptions      = &bindingDescription,        // °ó¶¨ÃèÊöÖ¸Õë
+		    .vertexAttributeDescriptionCount = static_cast<uint32_t>(attributeDescriptions.size()),
+		    .pVertexAttributeDescriptions    = attributeDescriptions.data()        // ÊôĞÔÃèÊöÖ¸Õë
+		};
 		vk::PipelineInputAssemblyStateCreateInfo inputAssembly{.topology = vk::PrimitiveTopology::eTriangleList};        // ÊäÈë×°Åä
 		vk::PipelineViewportStateCreateInfo      viewportState{.viewportCount = 1, .scissorCount = 1};                   // ½öÖ¸¶¨ÊıÁ¿£¬²»Ö¸¶¨ÄÚÈİ£¨¾ÍËãÖ¸¶¨ÁËÄÚÈİÒ²»á±»ºöÂÔ£¬ÒòÎªºóĞøÆä±»Ö¸¶¨Îª¶¯Ì¬×´Ì¬£©
 
@@ -427,6 +486,52 @@ class HelloTriangleApplication
 		commandPool = vk::raii::CommandPool(device, poolInfo);
 	}
 
+	void createVertexBuffer()
+	{
+		vk::BufferCreateInfo bufferInfo{
+		    .size        = sizeof(vertices[0]) * vertices.size(),         // »º³åÇø×Ü×Ö½ÚÊı
+		    .usage       = vk::BufferUsageFlagBits::eVertexBuffer,        // ÓÃÍ¾£¨¶¥µã»º³åÇø£©
+		    .sharingMode = vk::SharingMode::eExclusive                    // ¹²ÏíÄ£Ê½£¨¶ÀÕ¼£¬Í¬Ò»Ê±¼äÖ»ÄÜ±»Ò»¸ö¶ÓÁĞ×åËùÓĞ£©
+		};
+
+		vertexBuffer = vk::raii::Buffer(device, bufferInfo);        // ´´½¨»º³åÇø¾ä±ú£¨½ö´´½¨ÁË»º³åÇøµÄ¡°ÔªÊı¾İ¡±¶ÔÏó£¬Î´·ÖÅäÊµ¼ÊÏÔ´æ£©
+
+		vk::MemoryRequirements memRequirements = vertexBuffer.getMemoryRequirements();        // »º³åÇøÔÚÏÔ´æ/ÄÚ´æÖĞµÄ¶ÔÆëÒªÇó¡¢ÕæÊµ´óĞ¡¡¢Ö§³ÖµÄÄÚ´æÀàĞÍ£¨»º³åÇøÊı¾İÔÚÄÚ´æºÍÏÔ´æÖĞµÄ¶ş½øÖÆ¸ñÊ½ÊÇÍêÈ«ÏàÍ¬µÄ£¬ËùÒÔÄÚ´æÀàĞÍµÄÏŞÖÆÍùÍùÊÇÓ²¼şÉÏµÄÖÆÔ¼£©
+
+		vk::MemoryAllocateInfo memoryAllocateInfo        // ²éÕÒ²¢·ÖÅäÏÔ´æ
+		    {
+		        .allocationSize  = memRequirements.size,        // »º³åÇøÊµ¼ÊÒª·ÖÅäµÄ×Ö½ÚÊı£¨ÓÉÓÚÄÚ´æ¶ÔÆë£¬¿ÉÄÜ±È bufferInfo.size Òª´ó)
+		        .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits,
+		                                          vk::MemoryPropertyFlagBits::eHostVisible |           // CPU ¿É·ÃÎÊ
+		                                              vk::MemoryPropertyFlagBits::eHostCoherent        // Ö÷»úÒ»ÖÂĞÔ
+		                                          )};
+
+		vertexBufferMemory = vk::raii::DeviceMemory(device, memoryAllocateInfo);
+
+		vertexBuffer.bindMemory(*vertexBufferMemory, 0);        // ½«·ÖÅäµÄÏÔ´æ°ó¶¨µ½»º³åÇø¾ä±ú
+
+		void *data = vertexBufferMemory.mapMemory(0, bufferInfo.size);        // ½«¶¥µãÊı¾İ¿½±´µ½ÏÔ´æ
+		memcpy(data, vertices.data(), bufferInfo.size);
+		vertexBufferMemory.unmapMemory();
+	}
+
+	uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties)        // ¸ù¾İ¹ıÂËÆ÷ºÍÊôĞÔ²éÕÒÊÊºÏµÄÄÚ´æÀàĞÍË÷Òı
+	{
+		vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();        // »ñÈ¡ÏÔ¿¨ËùÓĞÄÚ´æ¶ÑºÍÄÚ´æÀàĞÍµÄĞÅÏ¢
+
+		for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)        // ±éÀúËùÓĞ¿ÉÓÃµÄÄÚ´æÀàĞÍ
+		{
+			if ((typeFilter & (1 << i)) &&                                                     // ¼ì²é Buffer ÊÇ·ñÖ§³ÖµÚ i ÖÖÄÚ´æÀàĞÍ
+			    (memProperties.memoryTypes[i].propertyFlags & properties) == properties        // ¼ì²éµÚ i ÖÖÄÚ´æÀàĞÍÊÇ·ñ°üº¬ÁËÎÒÃÇĞèÒªµÄËùÓĞÊôĞÔ
+			)
+			{
+				return i;        // ÕÒµ½ÁË£¬·µ»ØË÷Òı
+			}
+		}
+
+		throw std::runtime_error("failed to find suitable memory type");
+	};
+
 	void createCommandBuffer()
 	{
 		vk::CommandBufferAllocateInfo allocInfo{
@@ -487,7 +592,10 @@ class HelloTriangleApplication
 		                                swapChainExtent            // ²Ã¼ô¾ØĞÎ¿í¸ß
 		                                ));
 
+		commandBuffer.bindVertexBuffers(0, *vertexBuffer, {0});
+
 		commandBuffer.draw(3, 1, 0, 0);
+		// commandBuffer.draw(vertices.size(), 1, 0, 0);
 
 		commandBuffer.endRendering();        // ½áÊø¶¯Ì¬äÖÈ¾
 
