@@ -61,19 +61,17 @@ struct Vertex
 };
 
 // const std::vector<Vertex> vertices = {
-//     {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},         // 顶点 1: 红色
-//     {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},          // 顶点 2: 绿色
-//     {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};        // 顶点 3: 蓝色
+//     {{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
+//     {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+//     {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
 
 const std::vector<Vertex> vertices = {
-    {{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
-    {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-    {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
+    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},        // 左上
+    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},         // 右上
+    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},          // 右下
+    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}};        // 左下
 
-// const std::vector<Vertex> vertices = {
-//     {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
-//     {{0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}},
-//     {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
+const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0};
 
 class HelloTriangleApplication
 {
@@ -106,7 +104,10 @@ class HelloTriangleApplication
 	vk::raii::Pipeline       graphicsPipeline = nullptr;        // 图形管线对象
 
 	vk::raii::Buffer       vertexBuffer       = nullptr;        // 顶点缓冲区句柄（描述大小和用途）
-	vk::raii::DeviceMemory vertexBufferMemory = nullptr;        // 顶点缓冲区显存句柄（实际显存）
+	vk::raii::DeviceMemory vertexBufferMemory = nullptr;        // 顶点缓冲区内存对象（实际显存）
+
+	vk::raii::Buffer       indexBuffer       = nullptr;        // 索引缓冲区句柄
+	vk::raii::DeviceMemory indexBufferMemory = nullptr;        // 索引缓冲区内存对象
 
 	vk::raii::CommandPool                commandPool = nullptr;        // 命令池，用于分配命令缓冲
 	std::vector<vk::raii::CommandBuffer> commandBuffers;               // 命令缓冲，用于记录绘图指令
@@ -154,6 +155,7 @@ class HelloTriangleApplication
 		createGraphicsPipeline();
 		createCommandPool();
 		createVertexBuffer();
+		createIndexBuffer();
 		createCommandBuffer();
 		createSyncObjects();
 	}
@@ -514,6 +516,32 @@ class HelloTriangleApplication
 		memcpy(data, vertices.data(), bufferInfo.size);                       // 将顶点数据拷贝到显存（通过 PCI-E 总线）
 		vertexBufferMemory.unmapMemory();                                     // 恢复页表，终止虚拟地址到显存地址的映射关系
 	}
+
+	void createIndexBuffer()
+	{
+		vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+
+		// 创建暂存缓冲区
+		vk::raii::Buffer       stagingBuffer({});
+		vk::raii::DeviceMemory stagingBufferMemory({});
+		createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, stagingBuffer, stagingBufferMemory);
+
+		// 将索引数据拷贝到暂存缓冲区
+		void *data = stagingBufferMemory.mapMemory(0, bufferSize);
+		memcpy(data, indices.data(), (size_t) bufferSize);
+		stagingBufferMemory.unmapMemory();
+
+		// 创建 GPU 专用的索引缓冲区
+		createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal, indexBuffer, indexBufferMemory);
+
+		copyBuffer(stagingBuffer, indexBuffer, bufferSize);
+	}
+
+	void createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties, vk::raii::Buffer &buffer, vk::raii::DeviceMemory &bufferMemory)
+	{}
+
+	void copyBuffer(vk::raii::Buffer &srcBuffer, vk::raii::Buffer &dstBuffer, vk::DeviceSize size)
+	{}
 
 	uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties)        // 根据过滤器和属性查找适合的内存类型索引
 	{
