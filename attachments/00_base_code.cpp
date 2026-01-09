@@ -532,28 +532,6 @@ class HelloTriangleApplication
 		copyBuffer(stagingBuffer, vertexBuffer, stagingInfo.size);
 	}
 
-	void copyBuffer(vk::raii::Buffer &srcBuffer, vk::raii::Buffer &dstBuffer, vk::DeviceSize size)
-	{
-		vk::CommandBufferAllocateInfo allocInfo{
-		    .commandPool        = commandPool,
-		    .level              = vk::CommandBufferLevel::ePrimary,
-		    .commandBufferCount = 1};
-		vk::raii::CommandBuffer commandCopyBuffer = std::move(device.allocateCommandBuffers(allocInfo).front());
-
-		commandCopyBuffer.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});        // 开始录制
-
-		commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy(0, 0, size));        // 拷贝命令
-
-		commandCopyBuffer.end();        // 结束录制
-
-		queue.submit(
-		    vk::SubmitInfo{
-		        .commandBufferCount = 1,
-		        .pCommandBuffers    = &*commandCopyBuffer},
-		    nullptr);        // 提交到命令队列
-
-		queue.waitIdle();
-	}
 
 	void createIndexBuffer()
 	{
@@ -579,7 +557,27 @@ class HelloTriangleApplication
 	{}
 
 	void copyBuffer(vk::raii::Buffer &srcBuffer, vk::raii::Buffer &dstBuffer, vk::DeviceSize size)
-	{}
+	{
+		vk::CommandBufferAllocateInfo allocInfo{
+		    .commandPool        = commandPool,
+		    .level              = vk::CommandBufferLevel::ePrimary,
+		    .commandBufferCount = 1};
+		vk::raii::CommandBuffer commandCopyBuffer = std::move(device.allocateCommandBuffers(allocInfo).front());
+
+		commandCopyBuffer.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});        // 开始录制
+
+		commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy(0, 0, size));        // 拷贝命令
+
+		commandCopyBuffer.end();        // 结束录制
+
+		queue.submit(
+		    vk::SubmitInfo{
+		        .commandBufferCount = 1,
+		        .pCommandBuffers    = &*commandCopyBuffer},
+		    nullptr);        // 提交到命令队列
+
+		queue.waitIdle();
+	}
 
 	uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties)        // 根据过滤器和属性查找适合的内存类型索引
 	{
