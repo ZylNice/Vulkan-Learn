@@ -488,31 +488,69 @@ class HelloTriangleApplication
 
 	void createVertexBuffer()
 	{
-		vk::BufferCreateInfo bufferInfo{
-		    .size        = sizeof(vertices[0]) * vertices.size(),         // 缓冲区总字节数
-		    .usage       = vk::BufferUsageFlagBits::eVertexBuffer,        // 用途（顶点缓冲区）
-		    .sharingMode = vk::SharingMode::eExclusive                    // 共享模式（独占，同一时间只能被一个队列族所有）
+		// 暂存缓冲区
+		vk::BufferCreateInfo stagingInfo{
+		    .size        = sizeof(vertices[0]) * vertices.size(),
+		    .usage       = vk::BufferUsageFlagBits::eTransferSrc,        // 作为传输操作的源端
+		    .sharingMode = vk::SharingMode::eExclusive                   // 仅由当前图形队列使用
 		};
+		vk::raii::Buffer       stagingBuffer(device, stagingInfo);                                    // 创建暂存缓冲区对象（未分配实际内存）
+		vk::MemoryRequirements memRequirementsStaging = stagingBuffer.getMemoryRequirements();        // 查询该缓冲区对内存的要求
 
+		vk::MemoryAllocateInfo memoryAllocateInfoStaging{
+		    .allocationSize  = memRequirementsStaging.size,
+		    .memoryTypeIndex = findMemoryType(memRequirementsStaging.memoryTypeBits,
+		                                      vk::MemoryPropertyFlagBits::eHostVisible |              // 这块内存/显存可被 CPU(Host) 访问（对内存类型的额外要求）
+		                                          vk::MemoryPropertyFlagBits::eHostCoherent)};        // CPU 写入后会自动将缓存同步到内存/显存，确保 GPU 能看到（对内存类型的额外要求）
+		vk::raii::DeviceMemory stagingBufferMemory(device, memoryAllocateInfoStaging);
+
+		stagingBuffer.bindMemory(stagingBufferMemory, 0);
+
+		void *data = stagingBufferMemory.mapMemory(0, stagingInfo.size);        // 建立映射，返回指向 GPU 可见内存的指针（修改页表以建立该虚拟地址与 GPU 可见内存的映射关系）
+		memcpy(data, vertices.data(), stagingInfo.size);                        // 将顶点数据拷贝到 GPU 可见内存（不是显存，后续 GPU 通过 PCI-E 总线读取内存上的顶点缓冲区数据，较慢）
+		stagingBufferMemory.unmapMemory();                                      // 解除映射（恢复页表，终止该虚拟地址与 GPU 可见内存的映射关系，不能再通过该指针访问 GPU 可见内存）
+
+		vk::BufferCreateInfo bufferInfo{
+		    .size        = sizeof(vertices[0]) * vertices.size(),                                                 // 缓冲区总字节数
+		    .usage       = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,        // 用途（顶点缓冲区）
+		    .sharingMode = vk::SharingMode::eExclusive                                                            // 共享模式（独占，同一时间只能被一个队列族所有）
+		};
 		vertexBuffer = vk::raii::Buffer(device, bufferInfo);        // 创建缓冲区句柄（仅创建了缓冲区的“元数据”对象，未分配实际显存）
 
-		vk::MemoryRequirements memRequirements = vertexBuffer.getMemoryRequirements();        // 缓冲区在显存/内存中（考虑内存对齐后）的真实大小、可用的内存类型（由显卡决定，一定能得是显卡有的）（缓冲区数据在内存和显存中的二进制格式是完全相同的，所以内存类型的限制往往是硬件上的制约）
-
-		vk::MemoryAllocateInfo memoryAllocateInfo        // 查找并分配显存
+		vk::MemoryRequirements memRequirements = vertexBuffer.getMemoryRequirements();        // 缓冲区在显存/内存中（考虑内存对齐后）的真实大小、可用的内存类型（由显卡决定，GPU 一定可访问，CPU 不一定可访问）（缓冲区数据在内存和显存中的二进制格式是完全相同的，所以内存类型的限制往往是硬件上的制约）
+		vk::MemoryAllocateInfo memoryAllocateInfo                                             // 查找并分配显存
 		    {
 		        .allocationSize  = memRequirements.size,        // 缓冲区实际要分配的字节数（由于内存对齐，可能比 bufferInfo.size 要大)
 		        .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits,
-		                                          vk::MemoryPropertyFlagBits::eHostVisible |           // 这块内存/显存可被 CPU(Host) 访问（对内存类型的额外要求）
-		                                              vk::MemoryPropertyFlagBits::eHostCoherent        // CPU 写入后会自动将缓存同步到内存/显存，确保 GPU 能看到（对内存类型的额外要求）
-		                                          )};
-
+		                                          vk::MemoryPropertyFlagBits::eDeviceLocal)        // 缓冲区必须存放于显卡本地内存（独显的显存/集显的显存划分区）（CPU 通常无法直接访问）
+		    };
 		vertexBufferMemory = vk::raii::DeviceMemory(device, memoryAllocateInfo);        // 分配实际显存
+		vertexBuffer.bindMemory(*vertexBufferMemory, 0);                                // 将分配的显存绑定到缓冲区句柄
 
-		vertexBuffer.bindMemory(*vertexBufferMemory, 0);        // 将分配的显存绑定到缓冲区句柄
+		copyBuffer(stagingBuffer, vertexBuffer, stagingInfo.size);
+	}
 
-		void *data = vertexBufferMemory.mapMemory(0, bufferInfo.size);        // 返回 CPU 可访问的虚拟地址指针，修改页表以建立虚拟地址到显存地址的映射关系（硬件支持）
-		memcpy(data, vertices.data(), bufferInfo.size);                       // 将顶点数据拷贝到显存（通过 PCI-E 总线）
-		vertexBufferMemory.unmapMemory();                                     // 恢复页表，终止虚拟地址到显存地址的映射关系
+	void copyBuffer(vk::raii::Buffer &srcBuffer, vk::raii::Buffer &dstBuffer, vk::DeviceSize size)
+	{
+		vk::CommandBufferAllocateInfo allocInfo{
+		    .commandPool        = commandPool,
+		    .level              = vk::CommandBufferLevel::ePrimary,
+		    .commandBufferCount = 1};
+		vk::raii::CommandBuffer commandCopyBuffer = std::move(device.allocateCommandBuffers(allocInfo).front());
+
+		commandCopyBuffer.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});        // 开始录制
+
+		commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy(0, 0, size));        // 拷贝命令
+
+		commandCopyBuffer.end();        // 结束录制
+
+		queue.submit(
+		    vk::SubmitInfo{
+		        .commandBufferCount = 1,
+		        .pCommandBuffers    = &*commandCopyBuffer},
+		    nullptr);        // 提交到命令队列
+
+		queue.waitIdle();
 	}
 
 	uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties)        // 根据过滤器和属性查找适合的内存类型索引
