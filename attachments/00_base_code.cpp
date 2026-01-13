@@ -508,9 +508,10 @@ class HelloTriangleApplication
 
 		stagingBuffer.bindMemory(stagingBufferMemory, 0);
 
-		void *data = stagingBufferMemory.mapMemory(0, stagingInfo.size);        // 建立映射，返回指向 GPU 可见内存的指针（修改页表以建立该虚拟地址与 GPU 可见内存的映射关系）
-		memcpy(data, vertices.data(), stagingInfo.size);                        // 将顶点数据拷贝到 GPU 可见内存（不是显存，后续 GPU 通过 PCI-E 总线读取内存上的顶点缓冲区数据，较慢）
-		stagingBufferMemory.unmapMemory();                                      // 解除映射（恢复页表，终止该虚拟地址与 GPU 可见内存的映射关系，不能再通过该指针访问 GPU 可见内存）
+		// 使用映射内存（不是统一内存）
+		void *data = stagingBufferMemory.mapMemory(0, stagingInfo.size);        // 建立映射（不是对显存的映射），data 指向 GPU 可见的特殊 CPU 内存（GPU 通过 PCIe 总线读取该 CPU 内存）（修改页表以建立虚拟地址与特殊 CPU 内存的映射关系）
+		memcpy(data, vertices.data(), stagingInfo.size);                        // 将顶点数据从普通 CPU 内存拷贝到特殊 CPU 内存（不是显存，后续 GPU 的 DMA 通过 PCI-E 总线读取内存上的顶点缓冲区数据，较慢）
+		stagingBufferMemory.unmapMemory();                                      // 解除映射（恢复页表，终止该虚拟地址(data)与特殊 CPU 内存的映射关系，不能再通过该指针访问特殊 CPU 内存）
 
 		vk::BufferCreateInfo bufferInfo{
 		    .size        = sizeof(vertices[0]) * vertices.size(),                                                 // 缓冲区总字节数
