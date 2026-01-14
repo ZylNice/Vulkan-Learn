@@ -46,7 +46,7 @@ struct Vertex
 	static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDescriptions()        // 属性描述（如何读取一个顶点中的具体属性）
 	{
 		return {
-			// 顶点属性的着色器位置及其数据来源
+		    // 顶点属性的着色器位置及其数据来源
 		    vk::VertexInputAttributeDescription(        // 位置属性
 		        0,                                      // 属性在着色器中的位置（layout(location = 0))
 		        0,                                      // 该属性在 0 号绑定点中，从该绑定点对应的缓冲区中获取属性数据
@@ -406,8 +406,8 @@ class HelloTriangleApplication
 		vk::PipelineShaderStageCreateInfo fragShaderStageInfo{.stage = vk::ShaderStageFlagBits::eFragment, .module = shaderModule, .pName = "fragMain"};
 		vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
 
-		auto                                   bindingDescription    = Vertex::getBindingDescription();// 绑定点，顶点步长，顶点更新频率
-		auto                                   attributeDescriptions = Vertex::getAttributeDescriptions();// 一个顶点中有多个属性（属性描述）
+		auto                                   bindingDescription    = Vertex::getBindingDescription();           // 绑定点，顶点步长，顶点更新频率
+		auto                                   attributeDescriptions = Vertex::getAttributeDescriptions();        // 一个顶点中有多个属性（属性描述）
 		vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
 		    .vertexBindingDescriptionCount   = 1,
 		    .pVertexBindingDescriptions      = &bindingDescription,        // 绑定描述指针（一个绑定点对应一个缓冲区）
@@ -671,7 +671,7 @@ class HelloTriangleApplication
 
 		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);        // 绑定图形管线（告诉 GPU 使用那套着色器和装态配置）
 
-		commandBuffer.setViewport(0,
+		commandBuffer.setViewport(0,                                                     // 第 0 号视口（Vulkan 支持同时使用多个视口，分屏游戏）
 		                          vk::Viewport(                                          // 设置动态视口
 		                              0.0f, 0.0f,                                        // 视口矩形左上角坐标
 		                              static_cast<float>(swapChainExtent.width),         // 视口宽度
@@ -680,18 +680,18 @@ class HelloTriangleApplication
 		                              1.0f                                               // 最大深度
 		                              ));
 
-		commandBuffer.setScissor(0,
+		commandBuffer.setScissor(0,                             // 对应第 0 号视口的裁剪区域
 		                         vk::Rect2D(                    // 设置动态裁剪
 		                             vk::Offset2D(0, 0),        // 左上角起点
 		                             swapChainExtent            // 裁剪矩形宽高
 		                             ));
 
-		commandBuffer.bindVertexBuffers(0,        // buffer 的 0 号绑定点（binding）
-		                                *vertexBuffer,
-		                                {0}        // 从 buffer 的第 0 个字节开始读
+		commandBuffer.bindVertexBuffers(0,                    // 将 Buffer 绑定到管线的 0 号绑定点（管线创建时已经将 0 号绑定点解释为了顶点缓冲区）
+		                                *vertexBuffer,        // 顶点缓冲区
+		                                {0}                   // 从 buffer 的第 0 个字节开始读
 		);
 
-		commandBuffer.bindIndexBuffer(*indexBuffer,        // 缓冲区对象
+		commandBuffer.bindIndexBuffer(*indexBuffer,        // 索引缓冲区（不需要规定绑定点，因为索引缓冲区必须唯一，而顶点缓冲区可以将不同属性拆分到多个缓冲区）
 		                              0,                   // 偏移量
 		                              vk::IndexTypeValue<decltype(indices)::value_type>::value);
 
