@@ -37,7 +37,7 @@ struct Vertex
 	static vk::VertexInputBindingDescription getBindingDescription()        // 绑定描述（如何读取一个顶点）
 	{
 		return {
-		    0,                                  // 绑定索引（binding）
+		    0,                                  // 绑定到管线的 0 号插槽（binding，渲染管线的绑定点，一个绑定点对应一个 Buffer）
 		    sizeof(Vertex),                     // 每个顶点数据的字节跨度
 		    vk::VertexInputRate::eVertex        // 数据更新频率（逐顶点/逐实例（实例化））
 		};
@@ -46,9 +46,10 @@ struct Vertex
 	static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDescriptions()        // 属性描述（如何读取一个顶点中的具体属性）
 	{
 		return {
+			// 顶点属性的着色器位置及其数据来源
 		    vk::VertexInputAttributeDescription(        // 位置属性
-		        0,                                      // 位置（location，对应着色器中的 layout(location = 0))
-		        0,                                      // 绑定索引（binding，对应绑定描述）
+		        0,                                      // 属性在着色器中的位置（layout(location = 0))
+		        0,                                      // 该属性在 0 号绑定点中，从该绑定点对应的缓冲区中获取属性数据
 		        vk::Format::eR32G32Sfloat,              // (对应 float2）
 		        offsetof(Vertex, pos)                   // 自动计算 pos 成员在结构体中的偏移量
 		        ),
@@ -93,7 +94,7 @@ class HelloTriangleApplication
 	vk::raii::PhysicalDevice         physicalDevice = nullptr;        // 使用的显卡
 	vk::raii::Device                 device         = nullptr;        // 逻辑设备
 	uint32_t                         queueIndex     = ~0;             // 队列族索引，初始化为最大整数，作为无效值标记
-	vk::raii::Queue                  queue          = nullptr;        // 队列（同时支持图形和显示）
+	vk::raii::Queue                  queue          = nullptr;        // 队列（同时支持图形和显示）（Vulkan 规定，凡是支持图形/计算的队列族，默认强制支持传输（Transfer）操作）
 	vk::raii::SwapchainKHR           swapChain      = nullptr;
 	std::vector<vk::Image>           swapChainImages;               // 交换链中的图像
 	vk::SurfaceFormatKHR             swapChainSurfaceFormat;        // 交换链中图像格式
@@ -405,8 +406,8 @@ class HelloTriangleApplication
 		vk::PipelineShaderStageCreateInfo fragShaderStageInfo{.stage = vk::ShaderStageFlagBits::eFragment, .module = shaderModule, .pName = "fragMain"};
 		vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
 
-		auto                                   bindingDescription    = Vertex::getBindingDescription();
-		auto                                   attributeDescriptions = Vertex::getAttributeDescriptions();
+		auto                                   bindingDescription    = Vertex::getBindingDescription();// 绑定点，顶点步长，顶点更新频率
+		auto                                   attributeDescriptions = Vertex::getAttributeDescriptions();// 一个顶点中有多个属性（属性描述）
 		vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
 		    .vertexBindingDescriptionCount   = 1,
 		    .pVertexBindingDescriptions      = &bindingDescription,        // 绑定描述指针（一个绑定点对应一个缓冲区）
@@ -490,58 +491,46 @@ class HelloTriangleApplication
 
 	void createVertexBuffer()
 	{
-		// 暂存缓冲区
-		vk::BufferCreateInfo stagingInfo{
-		    .size        = sizeof(vertices[0]) * vertices.size(),
-		    .usage       = vk::BufferUsageFlagBits::eTransferSrc,        // 作为传输操作的源端
-		    .sharingMode = vk::SharingMode::eExclusive                   // 仅由当前图形队列使用
-		};
-		vk::raii::Buffer       stagingBuffer(device, stagingInfo);                                    // 创建暂存缓冲区对象（未分配实际内存）
-		vk::MemoryRequirements memRequirementsStaging = stagingBuffer.getMemoryRequirements();        // 查询该缓冲区对内存的要求
+		vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
 
-		vk::MemoryAllocateInfo memoryAllocateInfoStaging{
-		    .allocationSize  = memRequirementsStaging.size,
-		    .memoryTypeIndex = findMemoryType(memRequirementsStaging.memoryTypeBits,
-		                                      vk::MemoryPropertyFlagBits::eHostVisible |              // 这块内存/显存可被 CPU(Host) 访问（对内存类型的额外要求）
-		                                          vk::MemoryPropertyFlagBits::eHostCoherent)};        // CPU 写入后会自动将缓存同步到内存/显存，确保 GPU 能看到（对内存类型的额外要求）
-		vk::raii::DeviceMemory stagingBufferMemory(device, memoryAllocateInfoStaging);
+		vk::raii::Buffer       stagingBuffer({});
+		vk::raii::DeviceMemory stagingBufferMemory({});
 
-		stagingBuffer.bindMemory(stagingBufferMemory, 0);
+		// 在 CPU 上创建暂存缓冲区，分配由驱动管理的特殊 CPU 内存（GPU 可见，通过 PCIe 慢速读取）
+		createBuffer(bufferSize,
+		             vk::BufferUsageFlagBits::eTransferSrc,                                                       // 作为传输操作的源端
+		             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,        // CPU 可见，CPU 写入后立即对 GPU 可见
+		             stagingBuffer,
+		             stagingBufferMemory);
 
 		// 使用映射内存（不是统一内存）
-		void *data = stagingBufferMemory.mapMemory(0, stagingInfo.size);        // 建立映射（不是对显存的映射），data 指向 GPU 可见的特殊 CPU 内存（GPU 通过 PCIe 总线读取该 CPU 内存）（修改页表以建立虚拟地址与特殊 CPU 内存的映射关系）
-		memcpy(data, vertices.data(), stagingInfo.size);                        // 将顶点数据从普通 CPU 内存拷贝到特殊 CPU 内存（不是显存，后续 GPU 的 DMA 通过 PCI-E 总线读取内存上的顶点缓冲区数据，较慢）
-		stagingBufferMemory.unmapMemory();                                      // 解除映射（恢复页表，终止该虚拟地址(data)与特殊 CPU 内存的映射关系，不能再通过该指针访问特殊 CPU 内存）
+		void *data = stagingBufferMemory.mapMemory(0, bufferSize);        // 建立映射（不是对显存的映射），data 指向 GPU 可见的特殊 CPU 内存（GPU 通过 PCIe 总线读取该 CPU 内存）（修改页表以建立虚拟地址与特殊 CPU 内存的映射关系）
+		memcpy(data, vertices.data(), bufferSize);                        // 将顶点数据从普通 CPU 内存拷贝到特殊 CPU 内存（不是显存，后续 GPU 的 DMA 通过 PCI-E 总线读取内存上的顶点缓冲区数据，较慢）
+		stagingBufferMemory.unmapMemory();                                // 解除映射（恢复页表，终止该虚拟地址(data)与特殊 CPU 内存的映射关系，不能再通过该指针访问特殊 CPU 内存）
 
-		vk::BufferCreateInfo bufferInfo{
-		    .size        = sizeof(vertices[0]) * vertices.size(),                                                 // 缓冲区总字节数
-		    .usage       = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,        // 用途（顶点缓冲区）
-		    .sharingMode = vk::SharingMode::eExclusive                                                            // 共享模式（独占，同一时间只能被一个队列族所有）
-		};
-		vertexBuffer = vk::raii::Buffer(device, bufferInfo);        // 创建缓冲区句柄（仅创建了缓冲区的“元数据”对象，未分配实际显存）
+		// 在 GPU 上创建顶点缓冲区
+		createBuffer(bufferSize,
+		             vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer,
+		             vk::MemoryPropertyFlagBits::eDeviceLocal,        // 分配在显存中
+		             vertexBuffer,
+		             vertexBufferMemory);
 
-		vk::MemoryRequirements memRequirements = vertexBuffer.getMemoryRequirements();        // 缓冲区在显存/内存中（考虑内存对齐后）的真实大小、可用的内存类型（由显卡决定，GPU 一定可访问，CPU 不一定可访问）（缓冲区数据在内存和显存中的二进制格式是完全相同的，所以内存类型的限制往往是硬件上的制约）
-		vk::MemoryAllocateInfo memoryAllocateInfo                                             // 查找并分配显存
-		    {
-		        .allocationSize  = memRequirements.size,        // 缓冲区实际要分配的字节数（由于内存对齐，可能比 bufferInfo.size 要大)
-		        .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits,
-		                                          vk::MemoryPropertyFlagBits::eDeviceLocal)        // 缓冲区必须存放于显卡本地内存（独显的显存/集显的显存划分区）（CPU 通常无法直接访问）
-		    };
-		vertexBufferMemory = vk::raii::DeviceMemory(device, memoryAllocateInfo);        // 分配实际显存
-		vertexBuffer.bindMemory(*vertexBufferMemory, 0);                                // 将分配的显存绑定到缓冲区句柄
-
-		copyBuffer(stagingBuffer, vertexBuffer, stagingInfo.size);
+		copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
 	}
-
 
 	void createIndexBuffer()
 	{
+		// 计算索引数据所需的总字节数
 		vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();
 
 		// 创建暂存缓冲区
 		vk::raii::Buffer       stagingBuffer({});
 		vk::raii::DeviceMemory stagingBufferMemory({});
-		createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, stagingBuffer, stagingBufferMemory);
+		createBuffer(bufferSize,
+		             vk::BufferUsageFlagBits::eTransferSrc,                                                       // 这个缓冲区将作为传输数据的“源”
+		             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,        // CPU 可见，且 CPU 写入自动同步缓存，使 GPU 立即看到更新
+		             stagingBuffer,
+		             stagingBufferMemory);
 
 		// 将索引数据拷贝到暂存缓冲区
 		void *data = stagingBufferMemory.mapMemory(0, bufferSize);
@@ -554,20 +543,57 @@ class HelloTriangleApplication
 		copyBuffer(stagingBuffer, indexBuffer, bufferSize);
 	}
 
-	void createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties, vk::raii::Buffer &buffer, vk::raii::DeviceMemory &bufferMemory)
-	{}
-
-	void copyBuffer(vk::raii::Buffer &srcBuffer, vk::raii::Buffer &dstBuffer, vk::DeviceSize size)
+	void createBuffer(
+	    vk::DeviceSize          size,               // 缓冲区大小
+	    vk::BufferUsageFlags    usage,              // 缓冲区用途
+	    vk::MemoryPropertyFlags properties,         // 用户所需的内存属性
+	    vk::raii::Buffer       &buffer,             // 创建好的 RAII 缓冲区对象引用
+	    vk::raii::DeviceMemory &bufferMemory        // 分配好的 RAII 显存对象引用
+	)
 	{
+		// 缓冲区创建信息
+		vk::BufferCreateInfo bufferInfo{
+		    .size        = size,
+		    .usage       = usage,
+		    .sharingMode = vk::SharingMode::eExclusive};
+
+		buffer = vk::raii::Buffer(device, bufferInfo);        // 创建缓冲区句柄
+
+		vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
+
+		// 内存分配信息
+		vk::MemoryAllocateInfo allocInfo{
+		    .allocationSize  = memRequirements.size,                                             // 驱动要求的实际缓冲区大小，可能比我们请求的 size 略大，用于对齐（[Buffer] + [空隙])
+		    .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)        // 同时满足驱动要求（memoryTypeBits）和用户要求（properties）的内存类型
+		};
+
+		// 分配显存
+		bufferMemory = vk::raii::DeviceMemory(device, allocInfo);
+
+		// 将显存绑定到缓冲区句柄，从显存的第 0 个字节开始用
+		buffer.bindMemory(bufferMemory, 0);
+	}
+
+	void copyBuffer(
+	    vk::raii::Buffer &srcBuffer,        // 源缓冲区
+	    vk::raii::Buffer &dstBuffer,        // 目标缓冲区
+	    vk::DeviceSize    size              // 要拷贝的字节大小
+	)
+	{
+		// 配置命令缓冲区分配信息
 		vk::CommandBufferAllocateInfo allocInfo{
-		    .commandPool        = commandPool,
-		    .level              = vk::CommandBufferLevel::ePrimary,
-		    .commandBufferCount = 1};
+		    .commandPool        = commandPool,                             // 从哪个命令池分配（必须支持传输操作）
+		    .level              = vk::CommandBufferLevel::ePrimary,        // 主命令缓冲区，可以直接提交给队列
+		    .commandBufferCount = 1                                        // 仅创建一个命令缓冲区
+		};
+
+		// 分配命令缓冲区
 		vk::raii::CommandBuffer commandCopyBuffer = std::move(device.allocateCommandBuffers(allocInfo).front());
 
+		// eOneTimeSubmit 是一个性能提示，告诉驱动这个命令缓冲区只会被提交一次
 		commandCopyBuffer.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});        // 开始录制
 
-		commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy(0, 0, size));        // 拷贝命令
+		commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy(0, 0, size));        // 录制拷贝命令，由于缓冲区的对齐是 [Buffer] + [空隙]，所以 memcpy 前半段（这里内部结构无需对齐），后半段本就是空隙
 
 		commandCopyBuffer.end();        // 结束录制
 
@@ -577,6 +603,7 @@ class HelloTriangleApplication
 		        .pCommandBuffers    = &*commandCopyBuffer},
 		    nullptr);        // 提交到命令队列
 
+		// 阻塞 CPU，直到队列中所有操作完成（确保拷贝操作完成）
 		queue.waitIdle();
 	}
 
@@ -644,27 +671,36 @@ class HelloTriangleApplication
 
 		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);        // 绑定图形管线（告诉 GPU 使用那套着色器和装态配置）
 
-		commandBuffer.setViewport(0, vk::Viewport(                                          // 设置动态视口
-		                                 0.0f, 0.0f,                                        // 视口矩形左上角坐标
-		                                 static_cast<float>(swapChainExtent.width),         // 视口宽度
-		                                 static_cast<float>(swapChainExtent.height),        // 视口高度
-		                                 0.0f,                                              // 最小深度（Vulkan 的 NDC 空间与 DirectX 保持一致，与 OpenGL 不同）(Vulkan 的 NDC 的 z 轴范围是 [0, 1]，不再是标准立方体的 [-1, 1]）
-		                                 1.0f                                               // 最大深度
-		                                 ));
+		commandBuffer.setViewport(0,
+		                          vk::Viewport(                                          // 设置动态视口
+		                              0.0f, 0.0f,                                        // 视口矩形左上角坐标
+		                              static_cast<float>(swapChainExtent.width),         // 视口宽度
+		                              static_cast<float>(swapChainExtent.height),        // 视口高度
+		                              0.0f,                                              // 最小深度（Vulkan 的 NDC 空间与 DirectX 保持一致，与 OpenGL 不同）(Vulkan 的 NDC 的 z 轴范围是 [0, 1]，不再是标准立方体的 [-1, 1]）
+		                              1.0f                                               // 最大深度
+		                              ));
 
-		commandBuffer.setScissor(0, vk::Rect2D(                    // 设置动态裁剪
-		                                vk::Offset2D(0, 0),        // 左上角起点
-		                                swapChainExtent            // 裁剪矩形宽高
-		                                ));
+		commandBuffer.setScissor(0,
+		                         vk::Rect2D(                    // 设置动态裁剪
+		                             vk::Offset2D(0, 0),        // 左上角起点
+		                             swapChainExtent            // 裁剪矩形宽高
+		                             ));
 
-		commandBuffer.bindVertexBuffers(
-		    0,        // buffer 的 0 号绑定点（binding）
-		    *vertexBuffer,
-		    {0}        // 从 buffer 的第 0 个字节开始读
+		commandBuffer.bindVertexBuffers(0,        // buffer 的 0 号绑定点（binding）
+		                                *vertexBuffer,
+		                                {0}        // 从 buffer 的第 0 个字节开始读
 		);
 
-		// commandBuffer.draw(3, 1, 0, 0);
-		commandBuffer.draw(vertices.size(), 1, 0, 0);
+		commandBuffer.bindIndexBuffer(*indexBuffer,        // 缓冲区对象
+		                              0,                   // 偏移量
+		                              vk::IndexTypeValue<decltype(indices)::value_type>::value);
+
+		commandBuffer.drawIndexed(indices.size(),        // 索引总数（这次绘制一共要读取多少索引）
+		                          1,                     // 实例数量（一个模型画几次，实例化）
+		                          0,                     // 首索引偏移（从索引缓冲区的哪里开始读）
+		                          0,                     // 首顶点偏移（最终读取顶点 ID = 从索引缓冲拿到的值 + 这个偏移量）
+		                          0                      // 首实例偏移（定义 gl_InstanceIndex 从几开始数）
+		);
 
 		commandBuffer.endRendering();        // 结束动态渲染
 
