@@ -1,6 +1,7 @@
 // #pragma warning(disable : 26813)  // 屏蔽 C26813 警告: "使用‘按位与’来检查标志是否设置"
 
 #include <algorithm>
+#include <chrono>        // 用于获取高精度时间，实现平滑旋转
 #include <cstdlib>
 #include <fstream>
 #include <iostream>
@@ -15,7 +16,10 @@ import vulkan_hpp;
 
 #define GLFW_INCLUDE_VULKAN        // 导入 glfwCreateWindowSurface 函数（条件编译 glfw3.h）
 #include <GLFW/glfw3.h>
+
+#define GLM_FORCE_RADIANS        // 强制 GLM 使用弧度制（Vulkan 和 GLM 推荐）
 #include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 const uint32_t WIDTH                = 800;
 const uint32_t HEIGHT               = 600;
@@ -61,10 +65,12 @@ struct Vertex
 	}
 };
 
-// const std::vector<Vertex> vertices = {
-//     {{0.0f, -0.5f}, {1.0f, 1.0f, 1.0f}},
-//     {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
-//     {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
+struct UniformBufferObject
+{
+	glm::mat4 model;        // 模型矩阵
+	glm::mat4 view;         // 视图矩阵
+	glm::mat4 proj;         // 投影矩阵
+};
 
 const std::vector<Vertex> vertices = {
     {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},        // 左上
@@ -101,14 +107,18 @@ class HelloTriangleApplication
 	vk::Extent2D                     swapChainExtent;               // 交换链中图像分辨率
 	std::vector<vk::raii::ImageView> swapChainImageViews;           // 管线通过 imageview 接口，访问交换链中的图像
 
-	vk::raii::PipelineLayout pipelineLayout   = nullptr;        // 管线布局
-	vk::raii::Pipeline       graphicsPipeline = nullptr;        // 图形管线对象
+	vk::raii::DescriptorSetLayout descriptorSetLayout = nullptr;
+	vk::raii::PipelineLayout      pipelineLayout      = nullptr;        // 管线布局
+	vk::raii::Pipeline            graphicsPipeline    = nullptr;        // 图形管线对象
 
 	vk::raii::Buffer       vertexBuffer       = nullptr;        // 顶点缓冲区句柄（描述大小和用途）
 	vk::raii::DeviceMemory vertexBufferMemory = nullptr;        // 顶点缓冲区内存对象（实际显存）
+	vk::raii::Buffer       indexBuffer        = nullptr;        // 索引缓冲区句柄
+	vk::raii::DeviceMemory indexBufferMemory  = nullptr;        // 索引缓冲区内存对象
 
-	vk::raii::Buffer       indexBuffer       = nullptr;        // 索引缓冲区句柄
-	vk::raii::DeviceMemory indexBufferMemory = nullptr;        // 索引缓冲区内存对象
+	std::vector<vk::raii::Buffer>       uniformBuffers;              // 统一缓冲区句柄
+	std::vector<vk::raii::DeviceMemory> uniformBuffersMemory;        // 统一缓冲区内存对象
+	std::vector<void *>                 uniformBuffersMapped;        // 持久映射指针（避免频繁调用 map/unmap）
 
 	vk::raii::CommandPool                commandPool = nullptr;        // 命令池，用于分配命令缓冲
 	std::vector<vk::raii::CommandBuffer> commandBuffers;               // 命令缓冲，用于记录绘图指令
@@ -153,10 +163,12 @@ class HelloTriangleApplication
 		createLogicalDevice();
 		createSwapChain();
 		createImageViews();
+		createDescriptorSetLayout();
 		createGraphicsPipeline();
 		createCommandPool();
 		createVertexBuffer();
 		createIndexBuffer();
+		createUniformBuffers();
 		createCommandBuffer();
 		createSyncObjects();
 	}
@@ -398,6 +410,20 @@ class HelloTriangleApplication
 		}
 	}
 
+	void createDescriptorSetLayout()
+	{
+		vk::DescriptorSetLayoutBinding    uboLayoutBinding(0,                                         // 管线的 0 号绑定点
+		                                                   vk::DescriptorType::eUniformBuffer,        // 这是一个统一缓冲区（UBO）
+		                                                   1,                                         // 一个缓冲区对象
+		                                                   vk::ShaderStageFlagBits::eVertex,          // 这个资源仅在顶点着色器可见
+		                                                   nullptr);
+		vk::DescriptorSetLayoutCreateInfo layoutInfo{
+		    .bindingCount = 1,
+		    .pBindings    = &uboLayoutBinding};
+
+		descriptorSetLayout = vk::raii::DescriptorSetLayout(device, layoutInfo);
+	}
+
 	void createGraphicsPipeline()
 	{
 		vk::raii::ShaderModule shaderModule = createShaderModule(readFile("shaders/slang.spv"));
@@ -541,6 +567,32 @@ class HelloTriangleApplication
 		createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal, indexBuffer, indexBufferMemory);
 
 		copyBuffer(stagingBuffer, indexBuffer, bufferSize);
+	}
+
+	void createUniformBuffers()
+	{
+		vk::DeviceSize bufferSize = sizeof(UniformBufferObject);
+
+		uniformBuffers.clear();
+		uniformBuffersMemory.clear();
+		uniformBuffersMapped.clear();
+
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+		{
+			vk::raii::Buffer       buffer({});
+			vk::raii::DeviceMemory bufferMem({});
+
+			createBuffer(bufferSize,
+			             vk::BufferUsageFlagBits::eUniformBuffer,
+			             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+			             buffer,
+			             bufferMem);
+
+			uniformBuffers.emplace_back(std::move(buffer));
+			uniformBuffersMemory.emplace_back(std::move(bufferMem));
+
+			uniformBuffersMapped.emplace_back(uniformBuffersMemory[i].mapMemory(0, bufferSize));
+		}
 	}
 
 	void createBuffer(
@@ -771,6 +823,10 @@ class HelloTriangleApplication
 
 			inFlightFences.emplace_back(device, vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});        // 某工作帧，所有工作完成标志（初始栅栏必须是已触发状态，否则会导致第一帧死锁）
 		}
+	}
+
+	void updateUniformBuffer(uint32_t currentImage)
+	{
 	}
 
 	void drawFrame()
