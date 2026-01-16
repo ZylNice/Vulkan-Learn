@@ -842,7 +842,7 @@ class HelloTriangleApplication
 		ubo.proj  = glm::perspective(glm::radians(45.0f), static_cast<float>(swapChainExtent.width) / static_cast<float>(swapChainExtent.height), 0.1f, 10.0f);        // 投影矩阵，fov，宽高比，近平面，远平面
 		ubo.proj[1][1] *= -1;                                                                                                                                          // 翻转 Y 轴，GLM 是为 OpenGL 设计的（Y 轴向上），而 Vulkan 的 Clip Space Y 轴向下
 
-		memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));        // 更新（GPU 可见）特殊 CPU 内存中的 UBO
+		memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));
 	}
 
 	void drawFrame()
