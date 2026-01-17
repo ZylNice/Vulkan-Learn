@@ -120,6 +120,9 @@ class HelloTriangleApplication
 	std::vector<vk::raii::DeviceMemory> uniformBuffersMemory;        // 统一缓冲区内存对象
 	std::vector<void *>                 uniformBuffersMapped;        // 持久映射指针（避免频繁调用 map/unmap）
 
+	vk::raii::DescriptorPool             descriptorPool = nullptr;        // 描述符池
+	std::vector<vk::raii::DescriptorSet> descriptorSets;                  // 描述符集
+
 	vk::raii::CommandPool                commandPool = nullptr;        // 命令池，用于分配命令缓冲
 	std::vector<vk::raii::CommandBuffer> commandBuffers;               // 命令缓冲，用于记录绘图指令
 
@@ -169,6 +172,8 @@ class HelloTriangleApplication
 		createVertexBuffer();
 		createIndexBuffer();
 		createUniformBuffers();
+		createDescriptorPool();
+		createDescriptorSets();
 		createCommandBuffer();
 		createSyncObjects();
 	}
@@ -449,9 +454,9 @@ class HelloTriangleApplication
 		vk::PipelineRasterizationStateCreateInfo rasterizer{
 		    .depthClampEnable        = vk::False,
 		    .rasterizerDiscardEnable = vk::False,
-		    .polygonMode             = vk::PolygonMode::eFill,             // 填充三角形内部（填充模式）
-		    .cullMode                = vk::CullModeFlagBits::eBack,        // 剔除背面
-		    .frontFace               = vk::FrontFace::eClockwise,          // 顺时针为正面
+		    .polygonMode             = vk::PolygonMode::eFill,                  // 填充三角形内部（填充模式）
+		    .cullMode                = vk::CullModeFlagBits::eBack,             // 剔除背面
+		    .frontFace               = vk::FrontFace::eCounterClockwise,        // 逆时针为正面
 		    .depthBiasEnable         = vk::False,
 		    .lineWidth               = 1.0f};
 
@@ -471,7 +476,7 @@ class HelloTriangleApplication
 		    .attachmentCount = 1,
 		    .pAttachments    = &colorBlendAttachment};
 
-		// 动态渲染
+		// 动态渲染的状态
 		std::vector                        dynamicStates = {vk::DynamicState::eViewport, vk::DynamicState::eScissor};
 		vk::PipelineDynamicStateCreateInfo dynamicState{
 		    .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
@@ -596,6 +601,58 @@ class HelloTriangleApplication
 			uniformBuffers.emplace_back(std::move(buffer));
 			uniformBuffersMemory.emplace_back(std::move(bufferMem));
 			uniformBuffersMapped.emplace_back(uniformBuffersMemory[i].mapMemory(0, bufferSize));
+		}
+	}
+
+	void createDescriptorPool()
+	{
+		vk::DescriptorPoolSize poolSize(               // 描述符池的大小
+		    vk::DescriptorType::eUniformBuffer,        // 描述符池存储的描述符的类型
+		    MAX_FRAMES_IN_FLIGHT                       // 描述符池存储的描述符的数量
+		);
+
+		vk::DescriptorPoolCreateInfo poolInfo{
+		    .flags         = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,        // 允许单独释放描述符池中的某一描述符集
+		    .maxSets       = MAX_FRAMES_IN_FLIGHT,                                        // 描述符池能分配的描述符集的最大数量（因为描述符集这个容器本身也是要占显存的）
+		    .poolSizeCount = 1,                                                           // 描述符池的数量
+		    .pPoolSizes    = &poolSize                                                    // 每个描述符池的大小（数组指针）
+		};
+
+		descriptorPool = vk::raii::DescriptorPool(device, poolInfo);        // 创建描述符池（描述符池不存放实际资源，描述符集相当于容器，描述符相当于指针，都不是实际资源）
+	}
+
+	void createDescriptorSets()
+	{
+		std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *descriptorSetLayout);        // 将 descriptorSetLayout 重复 MAX_FRAMES_IN_FLIGHT 填入数组
+
+		vk::DescriptorSetAllocateInfo allocInfo{
+		    .descriptorPool     = descriptorPool,                               // 指定从哪个描述符池中分配内存
+		    .descriptorSetCount = static_cast<uint32_t>(layouts.size()),        // 要分配多少个描述符集
+		    .pSetLayouts        = layouts.data()                                // 指定每个集合使用什么布局
+		};
+
+		descriptorSets = device.allocateDescriptorSets(allocInfo);
+
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)        // 遍历并行帧进行配置
+		{
+			// 获取描述符对应的 Buffer
+			vk::DescriptorBufferInfo bufferInfo{
+			    .buffer = uniformBuffers[i],                 // 帧对应的 UBO 缓冲区
+			    .offset = 0,                                 // 从 Buffer 哪一位置开始读取
+			    .range  = sizeof(UniformBufferObject)        // 读取多长的数据
+			};
+
+			// 描述如何更新描述符（此结构一次只能更新一个绑定点）
+			vk::WriteDescriptorSet descriptorWrite{
+			    .dstSet          = descriptorSets[i],                         // 要更新哪一个描述符集
+			    .dstBinding      = 0,                                         // 描述符集布局绑定点
+			    .dstArrayElement = 0,                                         // 从第 0 个元素开始写
+			    .descriptorCount = 1,                                         // 更新 1 个描述符
+			    .descriptorType  = vk::DescriptorType::eUniformBuffer,        // 描述符类型
+			    .pBufferInfo     = &bufferInfo                                // 数据来源
+			};
+
+			device.updateDescriptorSets(descriptorWrite, {});        // 更新描述符集
 		}
 	}
 
@@ -750,6 +807,13 @@ class HelloTriangleApplication
 		commandBuffer.bindIndexBuffer(*indexBuffer,        // 索引缓冲区（不需要规定绑定点，因为索引缓冲区必须唯一，而顶点缓冲区可以将不同属性拆分到多个缓冲区）
 		                              0,                   // 偏移量
 		                              vk::IndexTypeValue<decltype(indices)::value_type>::value);
+
+		commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,        // 绑定到图形管线（图形/计算/光线追踪）
+		                                 pipelineLayout,                          // 管线布局（描述管线要求的描述符集布局）
+		                                 0,                                       // 从管线的第几个描述符集开始绑定
+		                                 *descriptorSets[frameIndex],             // 具体的描述符集
+		                                 nullptr                                  // 动态偏移量数组（影响描述符集中的动态 UBO，使得不同模型切换时无需切换描述符集，更改偏移量即可）
+		);
 
 		commandBuffer.drawIndexed(indices.size(),        // 索引总数（这次绘制一共要读取多少索引）
 		                          1,                     // 实例数量（一个模型画几次，实例化）

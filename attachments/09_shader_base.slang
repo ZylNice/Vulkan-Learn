@@ -18,13 +18,12 @@ struct VSOutput {
 [shader("vertex")]
 VSOutput vertMain(VSInput input) {
     VSOutput output;
-    output.pos = mul(ubo.proj, mul(ubo.model, float4(input.inPosition, 0.0, 1.0)));
+    output.pos = mul(ubo.proj, mul(ubo.view, mul(ubo.model, float4(input.inPosition, 0.0, 1.0))));
     output.color = input.inColor;
     return output;
 }
 
 [shader("fragment")]
 float4 fragMain(VSOutput inVert) : SV_Target {
-    float3 color = inVert.color;
-    return float4(color, 1.0);
+    return float4(inVert.color, 1.0);
 }
