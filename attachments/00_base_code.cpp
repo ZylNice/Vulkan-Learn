@@ -21,6 +21,9 @@ import vulkan_hpp;
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+#define STB_IMAGE_IMPLEMENTATION
+#include <stb_image.h>
+
 const uint32_t WIDTH                = 800;
 const uint32_t HEIGHT               = 600;
 constexpr int  MAX_FRAMES_IN_FLIGHT = 2;
@@ -111,6 +114,9 @@ class HelloTriangleApplication
 	vk::raii::PipelineLayout      pipelineLayout      = nullptr;        // 管线布局
 	vk::raii::Pipeline            graphicsPipeline    = nullptr;        // 图形管线对象
 
+	vk::raii::Image        textureImage       = nullptr;        // 纹理图像句柄
+	vk::raii::DeviceMemory textureImageMemory = nullptr;        // 分配给纹理图像的显存
+
 	vk::raii::Buffer       vertexBuffer       = nullptr;        // 顶点缓冲区句柄（描述大小和用途）(Buffer 一定对 GPU 可见，不一定对 CPU 可见)
 	vk::raii::DeviceMemory vertexBufferMemory = nullptr;        // 顶点缓冲区内存对象（实际显存）
 	vk::raii::Buffer       indexBuffer        = nullptr;        // 索引缓冲区句柄
@@ -169,6 +175,7 @@ class HelloTriangleApplication
 		createDescriptorSetLayout();
 		createGraphicsPipeline();
 		createCommandPool();
+		createTextureImage();
 		createVertexBuffer();
 		createIndexBuffer();
 		createUniformBuffers();
@@ -523,6 +530,76 @@ class HelloTriangleApplication
 		commandPool = vk::raii::CommandPool(device, poolInfo);
 	}
 
+	void createTextureImage()
+	{
+		int            texWidth, texHeight, texChannels;
+		stbi_uc       *pixels    = stbi_load("textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);        // STBI_rgb_alpha 表示强制加载 alpha 通道，即使原图没有
+		vk::DeviceSize imageSize = texWidth * texHeight * 4;
+		if (!pixels)
+		{
+			throw std::runtime_error("failed to load texture image!");
+		}
+
+		// 创建暂存缓冲区
+		vk::raii::Buffer       stagingBuffer({});
+		vk::raii::DeviceMemory stagingBufferMemory({});
+		createBuffer(imageSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, stagingBuffer, stagingBufferMemory);
+
+		// 将纹理拷贝到暂存缓冲区
+		void *data = stagingBufferMemory.mapMemory(0, imageSize);        // 从 0 开始
+		memcpy(data, pixels, imageSize);
+		stagingBufferMemory.unmapMemory();
+
+		stbi_image_free(pixels);        // 释放原始纹理数组
+
+		createImage(texWidth,
+		            texHeight,
+		            vk::Format::eR8G8B8A8Srgb,
+		            vk::ImageTiling::eOptimal,
+		            vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+		            vk::MemoryPropertyFlagBits::eDeviceLocal,
+		            textureImage,
+		            textureImageMemory);
+
+		transitionImageLayout(textureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+		copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
+		transitionImageLayout(textureImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+	}
+
+	void createImage(uint32_t                width,              // 图像高度
+	                 uint32_t                height,             // 图像宽度
+	                 vk::Format              format,             // 图像格式
+	                 vk::ImageTiling         tiling,             // 图像数据的内存排列模式
+	                 vk::ImageUsageFlags     usage,              // 图像的用途标志位
+	                 vk::MemoryPropertyFlags properties,         // 所需的内存属性
+	                 vk::raii::Image        &image,              // 图像对象（传出参数）
+	                 vk::raii::DeviceMemory &imageMemory)        // 图像显存对象（传出参数）
+	{
+		vk::ImageCreateInfo imageInfo{
+		    .imageType   = vk::ImageType::e2D,                 // 图像类型，1D/2D/3D
+		    .format      = format,                             // 像素格式，指定颜色通道的排列和大小
+		    .extent      = {width, height, 1},                 // 图像范围（宽，高，深），2D 图像的深度是 1
+		    .mipLevels   = 1,                                  // MIP 贴图级别数量，这里 1 表示没有生成 MIP 链
+		    .arrayLayers = 1,                                  // 纹理数组层数，这里 1 表示不是纹理数组
+		    .samples     = vk::SampleCountFlagBits::e1,        // 多重采样计数，e1 表示每像素 1 个样本（不启用 MSAA）
+		    .tiling      = tiling,                             // 内存平铺模式，（eLinear：线性排列，CPU 可直接读取，但在 GPU 上性能差）（eOptimal：硬件特定的优化排列，GPU 性能最佳，但 CPU 无法直接读取）
+		    .usage       = usage,                              // 纹理的用途标志
+		    .sharingMode = vk::SharingMode::eExclusive         // 队列族共享模式
+		};
+	}
+
+	void transitionImageLayout(const vk::raii::Image &image,
+	                           vk::ImageLayout        oldLayout,
+	                           vk::ImageLayout        newLayout)
+	{
+	}
+
+	void copyBufferToImage(const vk::raii::Buffer &buffer,
+	                       vk::raii::Image        &image,
+	                       uint32_t                width,
+	                       uint32_t                height)
+	{}
+
 	void createVertexBuffer()
 	{
 		vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
@@ -658,10 +735,10 @@ class HelloTriangleApplication
 
 	void createBuffer(
 	    vk::DeviceSize          size,               // 缓冲区大小
-	    vk::BufferUsageFlags    usage,              // 缓冲区用途
-	    vk::MemoryPropertyFlags properties,         // 用户所需的内存属性
-	    vk::raii::Buffer       &buffer,             // 创建好的 RAII 缓冲区对象引用
-	    vk::raii::DeviceMemory &bufferMemory        // 分配好的 RAII 显存对象引用
+	    vk::BufferUsageFlags    usage,              // 缓冲区用途（驱动要求）
+	    vk::MemoryPropertyFlags properties,         // 用户所需的内存属性（用户要求）
+	    vk::raii::Buffer       &buffer,             // 创建好的 RAII 缓冲区对象引用（传出参数）
+	    vk::raii::DeviceMemory &bufferMemory        // 分配好的 RAII 显存对象引用（传出参数）
 	)
 	{
 		// 缓冲区创建信息
