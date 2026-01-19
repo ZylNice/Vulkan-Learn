@@ -586,6 +586,16 @@ class HelloTriangleApplication
 		    .usage       = usage,                              // 纹理的用途标志
 		    .sharingMode = vk::SharingMode::eExclusive         // 队列族共享模式
 		};
+
+		image = vk::raii::Image(device, imageInfo);
+
+		vk::MemoryRequirements memRequirements = image.getMemoryRequirements();
+		vk::MemoryAllocateInfo allocInfo{
+		    .allocationSize  = memRequirements.size,
+		    .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)};
+
+		imageMemory = vk::raii::DeviceMemory(device, allocInfo);
+		image.bindMemory(imageMemory, 0);
 	}
 
 	void transitionImageLayout(const vk::raii::Image &image,
