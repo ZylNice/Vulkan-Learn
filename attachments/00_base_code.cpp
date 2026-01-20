@@ -532,6 +532,7 @@ class HelloTriangleApplication
 
 	void createTextureImage()
 	{
+		// 使用 STB 库加载图像数据
 		int            texWidth, texHeight, texChannels;
 		stbi_uc       *pixels    = stbi_load("textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);        // STBI_rgb_alpha 表示强制加载 alpha 通道，即使原图没有
 		vk::DeviceSize imageSize = texWidth * texHeight * 4;
@@ -545,13 +546,13 @@ class HelloTriangleApplication
 		vk::raii::DeviceMemory stagingBufferMemory({});
 		createBuffer(imageSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, stagingBuffer, stagingBufferMemory);
 
-		// 将纹理拷贝到暂存缓冲区
+		// 将纹理数据拷贝到暂存缓冲区
 		void *data = stagingBufferMemory.mapMemory(0, imageSize);        // 从 0 开始
 		memcpy(data, pixels, imageSize);
 		stagingBufferMemory.unmapMemory();
-
 		stbi_image_free(pixels);        // 释放原始纹理数组
 
+		// 创建显存上的的纹理图像
 		createImage(texWidth,
 		            texHeight,
 		            vk::Format::eR8G8B8A8Srgb,
@@ -561,13 +562,14 @@ class HelloTriangleApplication
 		            textureImage,
 		            textureImageMemory);
 
+		// 图像布局转换与复制
 		transitionImageLayout(textureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
 		copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
 		transitionImageLayout(textureImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
 	}
 
-	void createImage(uint32_t                width,              // 图像高度
-	                 uint32_t                height,             // 图像宽度
+	void createImage(uint32_t                width,              // 图像宽度
+	                 uint32_t                height,             // 图像高度
 	                 vk::Format              format,             // 图像格式
 	                 vk::ImageTiling         tiling,             // 图像数据的内存排列模式
 	                 vk::ImageUsageFlags     usage,              // 图像的用途标志位
@@ -587,21 +589,72 @@ class HelloTriangleApplication
 		    .sharingMode = vk::SharingMode::eExclusive         // 队列族共享模式
 		};
 
-		image = vk::raii::Image(device, imageInfo);
+		image = vk::raii::Image(device, imageInfo);        // 创建图像句柄
 
 		vk::MemoryRequirements memRequirements = image.getMemoryRequirements();
 		vk::MemoryAllocateInfo allocInfo{
 		    .allocationSize  = memRequirements.size,
 		    .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)};
+		imageMemory = vk::raii::DeviceMemory(device, allocInfo);        // 分配内存
 
-		imageMemory = vk::raii::DeviceMemory(device, allocInfo);
-		image.bindMemory(imageMemory, 0);
+		image.bindMemory(imageMemory, 0);        // 绑定实际显存，偏移量为 0
 	}
 
-	void transitionImageLayout(const vk::raii::Image &image,
-	                           vk::ImageLayout        oldLayout,
-	                           vk::ImageLayout        newLayout)
+	void transitionImageLayout(const vk::raii::Image &image,            // 需要转换布局的图像
+	                           vk::ImageLayout        oldLayout,        // 图像当前布局
+	                           vk::ImageLayout        newLayout         // 图像将要转换的布局
+	)
 	{
+		auto commandBuffer = beginSingleTimeCommands();        // 分配一个一次性的命令缓冲
+
+		vk::ImageMemoryBarrier barrier{
+		    .oldLayout           = oldLayout,
+		    .newLayout           = newLayout,
+		    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,        // 表示不涉及跨队列族的所有权转移
+		    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+		    .image               = image,        // 受影响的图像
+		    .subresourceRange    = {
+                // 指定屏障影响图像的哪些部分
+		           .aspectMask     = vk::ImageAspectFlagBits::eColor,        // 仅影响颜色分量
+		           .baseMipLevel   = 0,                                      // 从第 0 层 Mipmap 开始
+		           .levelCount     = 1,                                      // 仅影响 1 层 Mipmap
+		           .baseArrayLayer = 0,                                      // 从第 0 层数组层开始
+		           .layerCount     = 1                                       // 仅影响 1 层数组层
+            }};
+
+		vk::PipelineStageFlags sourceStage;             // 转换操作必须等待该阶段之前的操作完成才能开始
+		vk::PipelineStageFlags destinationStage;        // 转换操作完成后，该阶段及之后的操作才能开始
+
+		if (oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eTransferDstOptimal)
+		{
+			barrier.srcAccessMask = {};                                        // 不需要等待任何特定的内存写入操作完成，因为不在乎旧数据
+			barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;        // 转换完成后，保证传输写入操作可以安全进行
+
+			sourceStage      = vk::PipelineStageFlagBits::eTopOfPipe;
+			destinationStage = vk::PipelineStageFlagBits::eTransfer;
+		}
+		else if (oldLayout == vk::ImageLayout::eTransferDstOptimal && newLayout == vk::ImageLayout::eShaderReadOnlyOptimal)
+		{
+			barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
+			barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+
+			sourceStage      = vk::PipelineStageFlagBits::eTransfer;
+			destinationStage = vk::PipelineStageFlagBits::eFragmentShader;
+		}
+		else
+		{
+			throw std::invalid_argument("unsupported layout transition!");
+		}
+
+		commandBuffer->pipelineBarrier(
+		    sourceStage,
+		    destinationStage,
+		    {},
+		    {},
+		    nullptr,
+		    barrier);
+
+		endSingleTimeCommands(*commandBuffer);        // 结束录制并提交命令缓冲
 	}
 
 	void copyBufferToImage(const vk::raii::Buffer &buffer,
@@ -772,6 +825,14 @@ class HelloTriangleApplication
 
 		// 将显存绑定到缓冲区句柄，从显存的第 0 个字节开始用
 		buffer.bindMemory(bufferMemory, 0);
+	}
+
+	std::unique_ptr<vk::raii::CommandBuffer> beginSingleTimeCommands()
+	{
+	}
+
+	void endSingleTimeCommands(vk::raii::CommandBuffer &commandBuffer)
+	{
 	}
 
 	void copyBuffer(
