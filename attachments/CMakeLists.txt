@@ -173,7 +173,9 @@ function (add_chapter CHAPTER_NAME)
 endfunction ()
 
 add_chapter (00_base_code
-    SHADER 09_shader_base)
+    SHADER 09_shader_base
+    TEXTURES ../../images/texture.jpg
+    LIBS glm::glm)
 
 add_chapter (01_instance_creation)
 

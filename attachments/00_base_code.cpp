@@ -563,15 +563,15 @@ class HelloTriangleApplication
 		            textureImageMemory);
 
 		// 图像布局转换与复制
-		transitionImageLayout(textureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);
+		transitionImageLayout(textureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);        // 将图像改为适合 GPU 拷贝引擎高效写入的格式
 		copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
-		transitionImageLayout(textureImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);
+		transitionImageLayout(textureImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);        // 将图像改为适合 Shader 高效读取的格式
 	}
 
 	void createImage(uint32_t                width,              // 图像宽度
 	                 uint32_t                height,             // 图像高度
 	                 vk::Format              format,             // 图像格式
-	                 vk::ImageTiling         tiling,             // 图像数据的内存排列模式
+	                 vk::ImageTiling         tiling,             // 图像数据的内存排列模式（ImageTiling 在图像创建后不可更改，ImageLayout 在图像创建后可更改）
 	                 vk::ImageUsageFlags     usage,              // 图像的用途标志位
 	                 vk::MemoryPropertyFlags properties,         // 所需的内存属性
 	                 vk::raii::Image        &image,              // 图像对象（传出参数）
@@ -601,7 +601,7 @@ class HelloTriangleApplication
 	}
 
 	void transitionImageLayout(const vk::raii::Image &image,            // 需要转换布局的图像
-	                           vk::ImageLayout        oldLayout,        // 图像当前布局
+	                           vk::ImageLayout        oldLayout,        // 图像当前布局（图像创建时，按占用内存最大的无压缩布局分配内存，运行时通常采用压缩布局以节省显存带宽，图像布局的转换不会改变图像分配的实际内存大小，只会改变有效数据的大小）
 	                           vk::ImageLayout        newLayout         // 图像将要转换的布局
 	)
 	{
@@ -622,24 +622,27 @@ class HelloTriangleApplication
 		           .layerCount     = 1                                       // 仅影响 1 层数组层
             }};
 
-		vk::PipelineStageFlags sourceStage;             // 转换操作必须等待该阶段之前的操作完成才能开始
-		vk::PipelineStageFlags destinationStage;        // 转换操作完成后，该阶段及之后的操作才能开始
+		vk::PipelineStageFlags sourceStage;             // 屏障执行前，必须完成的阶段（生产者）(屏障之中，是图像布局转换操作）
+		vk::PipelineStageFlags destinationStage;        // 屏障执行后，才能开始的阶段（消费者）
 
+		// 执行依赖必须有，内存依赖可以没有，内存依赖挂载于执行依赖
 		if (oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eTransferDstOptimal)
 		{
-			barrier.srcAccessMask = {};                                        // 不需要等待任何特定的内存写入操作完成，因为不在乎旧数据
-			barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;        // 转换完成后，保证传输写入操作可以安全进行
+			// 内存依赖
+			barrier.srcAccessMask = {};                                        // 屏障执行前，sourceStage 中的 srcAccessMask 操作必须可见（因为此情况下屏障的执行不在乎旧数据，所以无需等待 sourceStage 的任何 L1 缓存刷入 L2）
+			barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;        // destinationStage 中的 dstAccessMask 操作执行前，屏障执行结果必须可见（保证传输写入操作可以安全进行，通过元数据缓存失效实现）
 
-			sourceStage      = vk::PipelineStageFlagBits::eTopOfPipe;
-			destinationStage = vk::PipelineStageFlagBits::eTransfer;
+			// 执行依赖
+			sourceStage      = vk::PipelineStageFlagBits::eTopOfPipe;        // 管线起点就能立马执行屏障
+			destinationStage = vk::PipelineStageFlagBits::eTransfer;         // 屏障执行后，才能开始传输拷贝阶段
 		}
 		else if (oldLayout == vk::ImageLayout::eTransferDstOptimal && newLayout == vk::ImageLayout::eShaderReadOnlyOptimal)
 		{
-			barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;
-			barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+			barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;        // 屏障执行前，传输写入操作必须可见
+			barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;           // Shader 读取前，屏障执行结果必须可见
 
-			sourceStage      = vk::PipelineStageFlagBits::eTransfer;
-			destinationStage = vk::PipelineStageFlagBits::eFragmentShader;
+			sourceStage      = vk::PipelineStageFlagBits::eTransfer;              // 屏障执行前，传输阶段必须完成
+			destinationStage = vk::PipelineStageFlagBits::eFragmentShader;        // 屏障执行后，片段着色器才能开始执行
 		}
 		else
 		{
@@ -657,11 +660,37 @@ class HelloTriangleApplication
 		endSingleTimeCommands(*commandBuffer);        // 结束录制并提交命令缓冲
 	}
 
-	void copyBufferToImage(const vk::raii::Buffer &buffer,
-	                       vk::raii::Image        &image,
-	                       uint32_t                width,
-	                       uint32_t                height)
-	{}
+	void copyBufferToImage(const vk::raii::Buffer &buffer,        // 源数据缓冲
+	                       vk::raii::Image        &image,         // 目标图像对象
+	                       uint32_t                width,         // 图像宽度
+	                       uint32_t                height         // 图像高度
+	)
+	{
+		std::unique_ptr<vk::raii::CommandBuffer> commandBuffer = beginSingleTimeCommands();        // beginSingleTimeCommands 用于执行那些不需要每帧都重复的短指令
+
+		vk::BufferImageCopy region{
+		    .bufferOffset      = 0,        // 缓冲区的起始字节偏移量
+		    .bufferRowLength   = 0,        // 缓冲区中数据的行长（以像素为单位）（设置为 0 表示数据紧密排列，即行长等于 imageExtent.width ，若因对齐内存而有空隙，则需显式指定真实值）
+		    .bufferImageHeight = 0,        // 缓冲区中图像的高度（以像素为单位）（设置为 0 表示数据紧密排列，即高度等于 imageExtent.height，若因对齐内存而有空隙，则需显式指定真实值）
+		    .imageSubresource  = {
+                // 指定要拷贝到的图像子资源
+		         .aspectMask     = vk::ImageAspectFlagBits::eColor,        // 拷贝到图像的哪些通道
+		         .mipLevel       = 0,                                      // 拷贝到 0 级 Mipmap
+		         .baseArrayLayer = 0,                                      // 纹理数组的起始索引（纹理数组）
+		         .layerCount     = 1,                                      // 要拷贝的层数（纹理数组）
+            },
+		    .imageOffset = {0, 0, 0},                // 图像中的拷贝起始坐标 (x, y, z)
+		    .imageExtent = {width, height, 1}        // 图像中的拷贝尺寸 (宽, 高, 深)
+		};
+
+		commandBuffer->copyBufferToImage(
+		    *buffer,                                     // 源缓冲区
+		    *image,                                      // 目标图像
+		    vk::ImageLayout::eTransferDstOptimal,        // 图像当前的布局（必须匹配）
+		    {region}                                     // 拷贝区域列表（可以一次拷贝多个区域）
+		);
+		endSingleTimeCommands(*commandBuffer);
+	}
 
 	void createVertexBuffer()
 	{
@@ -829,14 +858,34 @@ class HelloTriangleApplication
 
 	std::unique_ptr<vk::raii::CommandBuffer> beginSingleTimeCommands()
 	{
+		vk::CommandBufferAllocateInfo allocInfo{
+		    .commandPool        = commandPool,                             // 从哪个命令池分配命令缓冲区
+		    .level              = vk::CommandBufferLevel::ePrimary,        // 主命令缓冲，可以直接提交给队列执行
+		    .commandBufferCount = 1                                        // 仅创建一个命令缓冲
+		};
+		std::unique_ptr<vk::raii::CommandBuffer> commandBuffer = std::make_unique<vk::raii::CommandBuffer>(std::move(vk::raii::CommandBuffers(device, allocInfo).front()));
+
+		vk::CommandBufferBeginInfo beginInfo{
+		    .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit        // 告诉驱动程序，这个命令缓冲区仅会提交一次，用完就抛弃（让驱动基于这个信息做优化）
+		};
+		commandBuffer->begin(beginInfo);
+		return commandBuffer;
 	}
 
 	void endSingleTimeCommands(vk::raii::CommandBuffer &commandBuffer)
 	{
+		commandBuffer.end();
+
+		vk::SubmitInfo submitInfo{
+		    .commandBufferCount = 1,                      // 提交的命令缓冲区数量
+		    .pCommandBuffers    = &*commandBuffer,        // 命令缓冲区句柄指针
+		};
+		queue.submit(submitInfo, nullptr);        // 提交命令缓冲区
+		queue.waitIdle();                         // 阻塞 CPU 线程，等待 GPU 执行完队列中的所有任务
 	}
 
 	void copyBuffer(
-	    vk::raii::Buffer &srcBuffer,        // 源缓冲区
+	    vk::raii::Buffer &srcBuffer,        // 源缓冲区（缓冲区的拷贝不涉及压缩传输，图像的拷贝才涉及压缩传输）
 	    vk::raii::Buffer &dstBuffer,        // 目标缓冲区
 	    vk::DeviceSize    size              // 要拷贝的字节大小
 	)
@@ -997,10 +1046,10 @@ class HelloTriangleApplication
 	{
 		// 图像内存屏障
 		vk::ImageMemoryBarrier2 barrier = {
-		    .srcStageMask        = src_stage_mask,                     // 屏障之前，必须完成的流水线阶段
-		    .srcAccessMask       = src_access_mask,                    // 屏障之前，等源流水线阶段完成后，将其缓存中需要同步的数据类型写入显存（确保可见性）
-		    .dstStageMask        = dst_stage_mask,                     // 屏障之后，必须等待的流水线阶段（阻塞）
-		    .dstAccessMask       = dst_access_mask,                    // 屏障之后，目标流水线阶段缓存中的需要同步的数据设置为过期（着色器使用缓存数据时，发现数据过期会自动去显存拉取最新数据，从而完成数据同步）
+		    .srcStageMask        = src_stage_mask,                     // 屏障执行前，必须完成的流水线阶段（屏障之中，执行图像的布局转换操作）
+		    .srcAccessMask       = src_access_mask,                    // 屏障执行前，等源流水线阶段完成后，将其缓存中需要同步的数据类型写入显存（确保可见性）
+		    .dstStageMask        = dst_stage_mask,                     // 屏障执行后，才能开始的流水线阶段（阻塞）
+		    .dstAccessMask       = dst_access_mask,                    // 屏障执行后，目标流水线阶段缓存中的需要同步的数据设置为过期（着色器使用缓存数据时，发现数据过期会自动去显存拉取最新数据，从而完成数据同步）
 		    .oldLayout           = old_layout,                         // 图像当前内存布局（内存布局就是图像像素的物理排列方式，知道内存布局才知道（x，y）对应的内存地址在哪）
 		    .newLayout           = new_layout,                         // 图像转换后的内存布局
 		    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,            // 源队列族索引（此处由于是在同一队列族内同步，所以不需要考虑图像所有权在不同队列族间的转移）（对于独占模式的图像，同一时间只能为一个队列族所占有，仅占有它的队列族才能读写，所以此处需要交接图像的所有权）
@@ -1008,7 +1057,7 @@ class HelloTriangleApplication
 		    .image               = swapChainImages[imageIndex],        // 需要同步的图像
 		    .subresourceRange    =                                     // 图像的哪些部分需要同步
 		    {
-		        .aspectMask     = vk::ImageAspectFlagBits::eColor,        // 图像的哪些图层需要同步
+		        .aspectMask     = vk::ImageAspectFlagBits::eColor,        // 图像的哪些通道需要同步
 		        .baseMipLevel   = 0,                                      // Mipmap 起始层（需要同步的 Mapmap 层级范围）
 		        .levelCount     = 1,                                      // 从起点开始，连续选中多少层 Mipmap
 		        .baseArrayLayer = 0,                                      // 纹理数组起始层（需要同步的纹理数组范围）
@@ -1021,7 +1070,7 @@ class HelloTriangleApplication
 		    .pImageMemoryBarriers    = &barrier        // 图像内存屏障（数组）起始地址
 		};
 
-		commandBuffers[frameIndex].pipelineBarrier2(dependency_info);
+		commandBuffers[frameIndex].pipelineBarrier2(dependency_info);        // 录制屏障指令
 	}
 
 	void createSyncObjects()
