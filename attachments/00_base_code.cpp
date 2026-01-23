@@ -116,6 +116,8 @@ class HelloTriangleApplication
 
 	vk::raii::Image        textureImage       = nullptr;        // 纹理图像句柄
 	vk::raii::DeviceMemory textureImageMemory = nullptr;        // 分配给纹理图像的显存
+	vk::raii::ImageView    textureImageView   = nullptr;
+	vk::raii::Sampler      textureSampler     = nullptr;
 
 	vk::raii::Buffer       vertexBuffer       = nullptr;        // 顶点缓冲区句柄（描述大小和用途）(Buffer 一定对 GPU 可见，不一定对 CPU 可见)
 	vk::raii::DeviceMemory vertexBufferMemory = nullptr;        // 顶点缓冲区内存对象（实际显存）
@@ -176,6 +178,8 @@ class HelloTriangleApplication
 		createGraphicsPipeline();
 		createCommandPool();
 		createTextureImage();
+		createTextureImageView();
+		createTextureSampler();
 		createVertexBuffer();
 		createIndexBuffer();
 		createUniformBuffers();
@@ -304,7 +308,7 @@ class HelloTriangleApplication
 
 		const auto devIter = std::ranges::find_if(
 		    devices,
-		    [&](auto const &device) {
+		    [&](auto const &device) {                                                                    // 用 auto 作为 lambda 参数类型时，相当于用模板实现一个泛型 lambda
 			    bool supportsVulkan1_3 = device.getProperties().apiVersion >= VK_API_VERSION_1_3;        // 检查是否支持 Vulkan 1.3
 
 			    auto queueFamilies    = device.getQueueFamilyProperties();                              // 获取所有队列族
@@ -319,11 +323,13 @@ class HelloTriangleApplication
 				    });
 			    });
 
-			    auto features                = device.template getFeatures2<                    // 查询显卡支持的 Vulkan 特性
-                    vk::PhysicalDeviceFeatures2,                                 // 查询支持的 Vulkan 1.0 基础特性（链表头，Vulkan 规定第一个必须查询这个）
-                    vk::PhysicalDeviceVulkan13Features,                          // 查询支持的 Vulkan 1.3 新特性（看是否支持动态渲染）
-                    vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();        // 查询动态渲染状态特性（扩展特性）
-			    bool supporsRequiredFeatures = features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
+			    auto features = device.template getFeatures2<                    // 查询显卡支持的 Vulkan 特性
+			        vk::PhysicalDeviceFeatures2,                                 // 查询支持的 Vulkan 1.0 基础特性（链表头，Vulkan 规定第一个必须查询这个）
+			        vk::PhysicalDeviceVulkan13Features,                          // 查询支持的 Vulkan 1.3 新特性（看是否支持动态渲染）
+			        vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();        // 查询动态渲染状态特性（扩展特性）
+
+			    bool supporsRequiredFeatures = features.template get<vk::PhysicalDeviceFeatures2>().features.samplerAnisotropy &&        // 是否支持各向异性过滤
+			                                   features.template get<vk::PhysicalDeviceVulkan13Features>().dynamicRendering &&
 			                                   features.template get<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>().extendedDynamicState;
 
 			    // 汇总条件
@@ -359,7 +365,7 @@ class HelloTriangleApplication
 
 		// 配置特性链
 		vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan11Features, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain = {
-		    {},                                                          // 基础特性
+		    {.features = {.samplerAnisotropy = true}},                   // 请求开启各项异性过滤
 		    {.shaderDrawParameters = true},                              // 获取 gl_BaseVertex 访问能力（shader 中的 SV_VertexID = gl_VertexIndex - gl_BaseVertex，仅 gl_VertexIndex 常驻）
 		    {.synchronization2 = true, .dynamicRendering = true},        // 开启动态渲染
 		    {.extendedDynamicState = true}};                             // 开启扩展动态状态
@@ -566,6 +572,37 @@ class HelloTriangleApplication
 		transitionImageLayout(textureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);        // 将图像改为适合 GPU 拷贝引擎高效写入的格式
 		copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
 		transitionImageLayout(textureImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);        // 将图像改为适合 Shader 高效读取的格式
+	}
+
+	void createTextureImageView()
+	{
+		textureImageView = createImageView(textureImage, vk::Format::eR8G8B8A8Srgb);        // 创建纹理图像的视图
+	}
+
+	void createTextureSampler()
+	{
+		vk::PhysicalDeviceProperties properties = physicalDevice.getProperties();        // 获取物理设备属性
+
+		vk::SamplerCreateInfo samplerInfo{
+		    .magFilter        = vk::Filter::eLinear,                           // 放大过滤器，线性插值
+		    .minFilter        = vk::Filter::eLinear,                           // 缩小过滤器，线性插值
+		    .mipmapMode       = vk::SamplerMipmapMode::eLinear,                // Mipmap 模式（插值）
+		    .addressModeU     = vk::SamplerAddressMode::eRepeat,               // U 轴超出范围时，重复纹理（平铺，从头开始重复）
+		    .addressModeV     = vk::SamplerAddressMode::eRepeat,               // V 轴超出范围时，重复纹理
+		    .addressModeW     = vk::SamplerAddressMode::eRepeat,               // W 轴超出范围时，重复纹理
+		    .mipLodBias       = 0.0f,                                          // Mipmap 级别偏移量
+		    .anisotropyEnable = vk::True,                                      // 启用各项异性过滤（解决倾斜观察时的模糊问题）
+		    .maxAnisotropy    = properties.limits.maxSamplerAnisotropy,        // 使用设备支持的最大各项异性级别
+		    .compareEnable    = vk::False,                                     // 禁用比较操作（说明这不是阴影贴图)
+		    .compareOp        = vk::CompareOp::eAlways};
+
+		textureSampler = vk::raii::Sampler(device, samplerInfo);
+	}
+
+	vk::raii::ImageView createImageView(vk::raii::Image &image, vk::Format format)
+	{
+		vk::ImageViewCreateInfo viewInfo{
+		    .image = image};
 	}
 
 	void createImage(uint32_t                width,              // 图像宽度
