@@ -576,7 +576,7 @@ class HelloTriangleApplication
 
 	void createTextureImageView()
 	{
-		textureImageView = createImageView(textureImage, vk::Format::eR8G8B8A8Srgb);        // 创建纹理图像的视图
+		textureImageView = createImageView(textureImage, vk::Format::eR8G8B8A8Srgb);        // 创建纹理图像的视图（着色器必须通过 ImageView 来访问 Image
 	}
 
 	void createTextureSampler()
@@ -584,14 +584,14 @@ class HelloTriangleApplication
 		vk::PhysicalDeviceProperties properties = physicalDevice.getProperties();        // 获取物理设备属性
 
 		vk::SamplerCreateInfo samplerInfo{
-		    .magFilter        = vk::Filter::eLinear,                           // 放大过滤器，线性插值
-		    .minFilter        = vk::Filter::eLinear,                           // 缩小过滤器，线性插值
-		    .mipmapMode       = vk::SamplerMipmapMode::eLinear,                // Mipmap 模式（插值）
-		    .addressModeU     = vk::SamplerAddressMode::eRepeat,               // U 轴超出范围时，重复纹理（平铺，从头开始重复）
+		    .magFilter        = vk::Filter::eLinear,                           // 纹理放大过滤器，线性插值（一个纹理像素覆盖多个屏幕像素）
+		    .minFilter        = vk::Filter::eLinear,                           // 纹理缩小过滤器，线性插值（一个屏幕像素覆盖多个纹理像素）
+		    .mipmapMode       = vk::SamplerMipmapMode::eLinear,                // Mipmap 模式（如何在不同的 Mipmap 层级之间插值）
+		    .addressModeU     = vk::SamplerAddressMode::eRepeat,               // U 轴超出范围时，重复纹理（平铺，从头开始重复，类似铺地砖）
 		    .addressModeV     = vk::SamplerAddressMode::eRepeat,               // V 轴超出范围时，重复纹理
 		    .addressModeW     = vk::SamplerAddressMode::eRepeat,               // W 轴超出范围时，重复纹理
 		    .mipLodBias       = 0.0f,                                          // Mipmap 级别偏移量
-		    .anisotropyEnable = vk::True,                                      // 启用各项异性过滤（解决倾斜观察时的模糊问题）
+		    .anisotropyEnable = vk::True,                                      // 启用各项异性过滤（解决倾斜观察时的模糊问题）（纹理根据长轴来决定 mipmap 层级，短轴使用的 mipmap 级别过高导致模糊）(如果用短轴来决定 mipmap 会有更严重的闪烁）
 		    .maxAnisotropy    = properties.limits.maxSamplerAnisotropy,        // 使用设备支持的最大各项异性级别
 		    .compareEnable    = vk::False,                                     // 禁用比较操作（说明这不是阴影贴图)
 		    .compareOp        = vk::CompareOp::eAlways};
@@ -602,7 +602,18 @@ class HelloTriangleApplication
 	vk::raii::ImageView createImageView(vk::raii::Image &image, vk::Format format)
 	{
 		vk::ImageViewCreateInfo viewInfo{
-		    .image = image};
+		    .image            = image,                         // 要为哪个 Image 对象创建视图
+		    .viewType         = vk::ImageViewType::e2D,        // 告诉 GPU 将此数据视为 2D 纹理
+		    .format           = format,                        // 指定数据的解释方式（通常与 Image 格式一致）
+		    .subresourceRange = {
+		        // 视图可以看到图像的哪些部分
+		        vk::ImageAspectFlagBits::eColor,        // 访问颜色分量
+		        0,                                      // mipmap 层级，从 0 开始，共 1 层
+		        1,
+		        0,        // 数组层级， 从 0 开始，共 1 层
+		        1,
+		    }};
+		return vk::raii::ImageView(device, viewInfo);
 	}
 
 	void createImage(uint32_t                width,              // 图像宽度
