@@ -604,7 +604,7 @@ class HelloTriangleApplication
 		vk::ImageViewCreateInfo viewInfo{
 		    .image            = image,                         // 要为哪个 Image 对象创建视图
 		    .viewType         = vk::ImageViewType::e2D,        // 告诉 GPU 将此数据视为 2D 纹理
-		    .format           = format,                        // 指定数据的解释方式（通常与 Image 格式一致）
+		    .format           = format,                        // 指定数据的解释方式（通常与 Image 格式一致）（自动 Gamma 校正）（D32_SFLOAT_S8_UINT 格式下，需要对深度与模板缓冲做格式分离，一个是浮点，一个是 UINT 格式）
 		    .subresourceRange = {
 		        // 视图可以看到图像的哪些部分
 		        vk::ImageAspectFlagBits::eColor,        // 访问颜色分量
