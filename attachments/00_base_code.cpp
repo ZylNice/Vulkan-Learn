@@ -40,6 +40,7 @@ struct Vertex
 {
 	glm::vec2 pos;
 	glm::vec3 color;
+	glm::vec2 texCoord;
 
 	static vk::VertexInputBindingDescription getBindingDescription()        // 绑定描述（如何读取一个顶点）
 	{
@@ -50,7 +51,7 @@ struct Vertex
 		};
 	}
 
-	static std::array<vk::VertexInputAttributeDescription, 2> getAttributeDescriptions()        // 属性描述（如何读取一个顶点中的具体属性）
+	static std::array<vk::VertexInputAttributeDescription, 3> getAttributeDescriptions()        // 属性描述（如何读取一个顶点中的具体属性）
 	{
 		return {
 		    // 顶点属性的着色器位置及其数据来源
@@ -64,7 +65,12 @@ struct Vertex
 		        1,
 		        0,
 		        vk::Format::eR32G32B32Sfloat,        // （对应 float3）
-		        offsetof(Vertex, color))};
+		        offsetof(Vertex, color)),
+		    vk::VertexInputAttributeDescription(
+		        2,
+		        0,
+		        vk::Format::eR32G32Sfloat,
+		        offsetof(Vertex, texCoord))};
 	}
 };
 
@@ -76,10 +82,11 @@ struct UniformBufferObject
 };
 
 const std::vector<Vertex> vertices = {
-    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},        // 左上
-    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},         // 右上
-    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}},          // 右下
-    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}}};        // 左下
+    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},        // 左上
+    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},         // 右上
+    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},          // 右下
+    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}          // 左下
+};
 
 const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0};
 
@@ -430,16 +437,25 @@ class HelloTriangleApplication
 
 	void createDescriptorSetLayout()
 	{
-		vk::DescriptorSetLayoutBinding uboLayoutBinding(0,                                         // 描述符集布局绑定点（layout(binding = 0)）
-		                                                vk::DescriptorType::eUniformBuffer,        // 描述符类型（统一缓冲区，UBO）
-		                                                1,                                         // 描述符数量（有多个时，shader 需要以数组形式接收）（描述符相当于显存资源指针）
-		                                                vk::ShaderStageFlagBits::eVertex,          // 仅在顶点着色器阶段使用
-		                                                nullptr                                    // (图像采样器才需要，这里为空)
-		);
+		std::array bindings = {
+		    vk::DescriptorSetLayoutBinding(
+		        0,                                         // 描述符集布局绑定点（layout(binding = 0)）
+		        vk::DescriptorType::eUniformBuffer,        // 描述符类型（统一缓冲区，UBO）
+		        1,                                         // 描述符数量（有多个时，shader 需要以数组形式接收）（描述符相当于显存资源指针）
+		        vk::ShaderStageFlagBits::eVertex,          // 仅在顶点着色器阶段使用
+		        nullptr                                    // (图像采样器才需要，这里为空)
+		        ),
+		    vk::DescriptorSetLayoutBinding(
+		        1,
+		        vk::DescriptorType::eCombinedImageSampler,
+		        1,
+		        vk::ShaderStageFlagBits::eVertex,
+		        nullptr)};
 
-		vk::DescriptorSetLayoutCreateInfo layoutInfo{// 创建布局信息结构体
-		                                             .bindingCount = 1,
-		                                             .pBindings    = &uboLayoutBinding};
+		// 创建布局信息结构体
+		vk::DescriptorSetLayoutCreateInfo layoutInfo{
+		    .bindingCount = static_cast<uint32_t>(bindings.size()),
+		    .pBindings    = bindings.data()};
 
 		descriptorSetLayout = vk::raii::DescriptorSetLayout(device, layoutInfo);        // 创建描述符集布局（一个描述符集布局可以有多个绑定点，每个绑定点可以绑定多个同类型的描述符）
 	}
@@ -823,16 +839,20 @@ class HelloTriangleApplication
 
 	void createDescriptorPool()
 	{
-		vk::DescriptorPoolSize poolSize(               // 描述符池的大小
-		    vk::DescriptorType::eUniformBuffer,        // 描述符池存储的描述符的类型
-		    MAX_FRAMES_IN_FLIGHT                       // 描述符池存储的描述符的数量
-		);
+		std::array poolSize{
+		    vk::DescriptorPoolSize(                        // 描述符池的大小
+		        vk::DescriptorType::eUniformBuffer,        // 描述符池存储的描述符的类型
+		        MAX_FRAMES_IN_FLIGHT                       // 描述符池存储的描述符的数量
+		        ),
+		    vk::DescriptorPoolSize(
+		        vk::DescriptorType::eCombinedImageSampler,
+		        MAX_FRAMES_IN_FLIGHT)};
 
 		vk::DescriptorPoolCreateInfo poolInfo{
 		    .flags         = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,        // 允许单独释放描述符池中的某一描述符集
 		    .maxSets       = MAX_FRAMES_IN_FLIGHT,                                        // 描述符池能分配的描述符集的最大数量（因为描述符集这个容器本身也是要占显存的）
 		    .poolSizeCount = 1,                                                           // 描述符池的数量
-		    .pPoolSizes    = &poolSize                                                    // 每个描述符池的大小（数组指针）
+		    .pPoolSizes    = poolSize.data()                                                   // 每个描述符池的大小（数组指针）
 		};
 
 		descriptorPool = vk::raii::DescriptorPool(device, poolInfo);        // 创建描述符池（描述符池不存放实际资源，描述符集相当于容器，描述符相当于指针，都不是实际资源）
@@ -859,17 +879,33 @@ class HelloTriangleApplication
 			    .range  = sizeof(UniformBufferObject)        // 读取多长的数据
 			};
 
-			// 描述如何更新描述符（此结构一次只能更新一个绑定点）
-			vk::WriteDescriptorSet descriptorWrite{
-			    .dstSet          = descriptorSets[i],                         // 要更新哪一个描述符集
-			    .dstBinding      = 0,                                         // 描述符集布局绑定点
-			    .dstArrayElement = 0,                                         // 从第 0 个元素开始写
-			    .descriptorCount = 1,                                         // 更新 1 个描述符
-			    .descriptorType  = vk::DescriptorType::eUniformBuffer,        // 描述符类型
-			    .pBufferInfo     = &bufferInfo                                // 数据来源
+			vk::DescriptorImageInfo imageInfo{
+			    .sampler     = textureSampler,                                // 指定采样器
+			    .imageView   = textureImageView,                              // 指定图像视图
+			    .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal        // 指定图像布局
 			};
 
-			device.updateDescriptorSets(descriptorWrite, {});        // 更新描述符集
+			std::array descriptorWrites{
+			    // 描述如何更新描述符（此结构一次只能更新一个绑定点）
+			    vk::WriteDescriptorSet{
+			        .dstSet          = descriptorSets[i],                         // 要更新哪一个描述符集
+			        .dstBinding      = 0,                                         // 描述符集布局绑定点
+			        .dstArrayElement = 0,                                         // 从第 0 个元素开始写
+			        .descriptorCount = 1,                                         // 更新 1 个描述符
+			        .descriptorType  = vk::DescriptorType::eUniformBuffer,        // 描述符类型
+			        .pBufferInfo     = &bufferInfo                                // 数据来源
+			    },
+			    vk::WriteDescriptorSet{
+			        .dstSet          = descriptorSets[i],
+			        .dstBinding      = 1,
+			        .dstArrayElement = 0,
+			        .descriptorCount = 1,
+			        .descriptorType  = vk::DescriptorType::eCombinedImageSampler,
+			        .pImageInfo      = &imageInfo}};
+
+
+
+			device.updateDescriptorSets(descriptorWrites, {});        // 更新描述符集
 		}
 	}
 
