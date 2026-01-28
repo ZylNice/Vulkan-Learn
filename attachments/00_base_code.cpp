@@ -38,7 +38,7 @@ constexpr bool enableValidationLayers = true;
 
 struct Vertex
 {
-	glm::vec2 pos;
+	glm::vec3 pos;
 	glm::vec3 color;
 	glm::vec2 texCoord;
 
@@ -58,7 +58,7 @@ struct Vertex
 		    vk::VertexInputAttributeDescription(        // 位置属性
 		        0,                                      // 该顶点属性在着色器中的 0 号位置（layout(location = 0))
 		        0,                                      // 该顶点属性在 0 号顶点输入绑定点中，要从该绑定点对应的缓冲区中获取属性数据
-		        vk::Format::eR32G32Sfloat,              // (对应 float2）
+		        vk::Format::eR32G32B32Sfloat,           // (对应 float3）
 		        offsetof(Vertex, pos)                   // 自动计算 pos 成员在结构体中的偏移量
 		        ),
 		    vk::VertexInputAttributeDescription(        // 颜色属性
@@ -82,13 +82,19 @@ struct UniformBufferObject
 };
 
 const std::vector<Vertex> vertices = {
-    {{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},        // 左上
-    {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},         // 右上
-    {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},          // 右下
-    {{-0.5f, 0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}          // 左下
-};
+    {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+    {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+    {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+    {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
 
-const std::vector<uint16_t> indices = {0, 1, 2, 2, 3, 0};
+    {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+    {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+    {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+    {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}};
+
+const std::vector<uint16_t> indices = {
+    0, 1, 2, 2, 3, 0,
+    4, 5, 6, 6, 7, 4};
 
 class HelloTriangleApplication
 {
@@ -120,6 +126,10 @@ class HelloTriangleApplication
 	vk::raii::DescriptorSetLayout descriptorSetLayout = nullptr;
 	vk::raii::PipelineLayout      pipelineLayout      = nullptr;        // 管线布局
 	vk::raii::Pipeline            graphicsPipeline    = nullptr;        // 图形管线对象
+
+	vk::raii::Image        depthImage       = nullptr;
+	vk::raii::DeviceMemory depthImageMemory = nullptr;
+	vk::raii::ImageView    depthImageView   = nullptr;
 
 	vk::raii::Image        textureImage       = nullptr;        // 纹理图像句柄
 	vk::raii::DeviceMemory textureImageMemory = nullptr;        // 分配给纹理图像的显存
@@ -184,6 +194,7 @@ class HelloTriangleApplication
 		createDescriptorSetLayout();
 		createGraphicsPipeline();
 		createCommandPool();
+		createDepthResources();
 		createTextureImage();
 		createTextureImageView();
 		createTextureSampler();
@@ -228,6 +239,7 @@ class HelloTriangleApplication
 		cleanupSwapChain();
 		createSwapChain();
 		createImageViews();
+		createDepthResources();
 	}
 
 	void cleanupSwapChain()
@@ -495,6 +507,14 @@ class HelloTriangleApplication
 		    .rasterizationSamples = vk::SampleCountFlagBits::e1,        // 采样数为 1（关闭 MSAA）
 		    .sampleShadingEnable  = vk::False};
 
+		// 深度与模板状态配置
+		vk::PipelineDepthStencilStateCreateInfo depthStencil{
+		    .depthTestEnable       = vk::True,
+		    .depthWriteEnable      = vk::True,
+		    .depthCompareOp        = vk::CompareOp::eLess,
+		    .depthBoundsTestEnable = vk::False,
+		    .stencilTestEnable     = vk::False};
+
 		// 颜色混合附件
 		vk::PipelineColorBlendAttachmentState colorBlendAttachment{
 		    .blendEnable    = vk::False,        // 关闭混合
@@ -520,6 +540,8 @@ class HelloTriangleApplication
 
 		pipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
 
+		vk::Format depthFormat = findDepthFormat();
+
 		vk::StructureChain<vk::GraphicsPipelineCreateInfo, vk::PipelineRenderingCreateInfo> pipelineCreateInfoChain = {
 		    // 标准管线配置
 		    {
@@ -530,6 +552,7 @@ class HelloTriangleApplication
 		        .pViewportState      = &viewportState,          // 视口状态（视口+裁剪）
 		        .pRasterizationState = &rasterizer,             // 光栅化状态
 		        .pMultisampleState   = &multisampling,          // 多重采样状态
+		        .pDepthStencilState  = &depthStencil,           // 讲深度状态绑定到管线
 		        .pColorBlendState    = &colorBlending,          // 颜色混合状态
 		        .pDynamicState       = &dynamicState,           // 动态状态（允许在 CommandBuffer 中动态修改）
 		        .layout              = pipelineLayout,          // 管线布局
@@ -538,7 +561,8 @@ class HelloTriangleApplication
 		    // 动态渲染配置
 		    {
 		        .colorAttachmentCount    = 1,
-		        .pColorAttachmentFormats = &swapChainSurfaceFormat.format        // 颜色附件格式列表
+		        .pColorAttachmentFormats = &swapChainSurfaceFormat.format,        // 颜色附件格式列表
+				.depthAttachmentFormat = depthFormat
 		    }};
 
 		graphicsPipeline = vk::raii::Pipeline(device, nullptr, pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>());
@@ -1025,6 +1049,18 @@ class HelloTriangleApplication
 		    .commandBufferCount = MAX_FRAMES_IN_FLIGHT                     // 分配(两个)命令缓冲
 		};
 		commandBuffers = vk::raii::CommandBuffers(device, allocInfo);        // CommandBuffers 函数返回的是命令缓冲数组
+	}
+
+	void createDepthResources()
+	{
+	}
+
+	vk::Format findSupportedFormat(const std::vector<vk::Format> &candidates, vk::ImageTiling tiling, vk::FormatFeatureFlagBits features)
+	{
+	}
+
+	vk::Format findDepthFormat()
+	{
 	}
 
 	void recordCommandBuffer(uint32_t imageIndex)
