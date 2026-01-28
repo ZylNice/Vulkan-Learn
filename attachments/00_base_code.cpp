@@ -449,8 +449,9 @@ class HelloTriangleApplication
 		        1,
 		        vk::DescriptorType::eCombinedImageSampler,
 		        1,
-		        vk::ShaderStageFlagBits::eVertex,
-		        nullptr)};
+		        vk::ShaderStageFlagBits::eFragment,
+		        nullptr        // 动态采样器（后续创建描述符集时，指定具体的采样器对象）
+		        )};
 
 		// 创建布局信息结构体
 		vk::DescriptorSetLayoutCreateInfo layoutInfo{
@@ -851,8 +852,8 @@ class HelloTriangleApplication
 		vk::DescriptorPoolCreateInfo poolInfo{
 		    .flags         = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,        // 允许单独释放描述符池中的某一描述符集
 		    .maxSets       = MAX_FRAMES_IN_FLIGHT,                                        // 描述符池能分配的描述符集的最大数量（因为描述符集这个容器本身也是要占显存的）
-		    .poolSizeCount = 1,                                                           // 描述符池的数量
-		    .pPoolSizes    = poolSize.data()                                                   // 每个描述符池的大小（数组指针）
+		    .poolSizeCount = static_cast<uint32_t>(poolSize.size()),                      // 描述符池的数量
+		    .pPoolSizes    = poolSize.data()                                              // 每个描述符池的大小（数组指针）
 		};
 
 		descriptorPool = vk::raii::DescriptorPool(device, poolInfo);        // 创建描述符池（描述符池不存放实际资源，描述符集相当于容器，描述符相当于指针，都不是实际资源）
@@ -861,13 +862,13 @@ class HelloTriangleApplication
 	void createDescriptorSets()
 	{
 		std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *descriptorSetLayout);        // 将 descriptorSetLayout 重复 MAX_FRAMES_IN_FLIGHT 填入数组
+		vk::DescriptorSetAllocateInfo        allocInfo{
+		           .descriptorPool     = descriptorPool,                               // 指定从哪个描述符池中分配内存
+		           .descriptorSetCount = static_cast<uint32_t>(layouts.size()),        // 要分配多少个描述符集
+		           .pSetLayouts        = layouts.data()                                // 指定每个集合使用什么布局
+        };
 
-		vk::DescriptorSetAllocateInfo allocInfo{
-		    .descriptorPool     = descriptorPool,                               // 指定从哪个描述符池中分配内存
-		    .descriptorSetCount = static_cast<uint32_t>(layouts.size()),        // 要分配多少个描述符集
-		    .pSetLayouts        = layouts.data()                                // 指定每个集合使用什么布局
-		};
-
+		descriptorSets.clear();
 		descriptorSets = device.allocateDescriptorSets(allocInfo);
 
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)        // 遍历并行帧进行配置
@@ -902,8 +903,6 @@ class HelloTriangleApplication
 			        .descriptorCount = 1,
 			        .descriptorType  = vk::DescriptorType::eCombinedImageSampler,
 			        .pImageInfo      = &imageInfo}};
-
-
 
 			device.updateDescriptorSets(descriptorWrites, {});        // 更新描述符集
 		}
