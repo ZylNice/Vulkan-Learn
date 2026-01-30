@@ -509,11 +509,12 @@ class HelloTriangleApplication
 
 		// 深度与模板状态配置
 		vk::PipelineDepthStencilStateCreateInfo depthStencil{
-		    .depthTestEnable       = vk::True,
-		    .depthWriteEnable      = vk::True,
-		    .depthCompareOp        = vk::CompareOp::eLess,
-		    .depthBoundsTestEnable = vk::False,
-		    .stencilTestEnable     = vk::False};
+		    .depthTestEnable       = vk::True,                    // 开启深度测试
+		    .depthWriteEnable      = vk::True,                    // 开启深度写入
+		    .depthCompareOp        = vk::CompareOp::eLess,        // 深度值更小的像素通过深度测试
+		    .depthBoundsTestEnable = vk::False,                   // 关闭深度边界测试（允许丢弃不在特定 min/max 深度范围内的片段）
+		    .stencilTestEnable     = vk::False                    // 关闭模板测试
+		};
 
 		// 颜色混合附件
 		vk::PipelineColorBlendAttachmentState colorBlendAttachment{
@@ -562,8 +563,7 @@ class HelloTriangleApplication
 		    {
 		        .colorAttachmentCount    = 1,
 		        .pColorAttachmentFormats = &swapChainSurfaceFormat.format,        // 颜色附件格式列表
-				.depthAttachmentFormat = depthFormat
-		    }};
+		        .depthAttachmentFormat   = depthFormat}};
 
 		graphicsPipeline = vk::raii::Pipeline(device, nullptr, pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>());
 	}
@@ -617,7 +617,7 @@ class HelloTriangleApplication
 
 	void createTextureImageView()
 	{
-		textureImageView = createImageView(textureImage, vk::Format::eR8G8B8A8Srgb);        // 创建纹理图像的视图（着色器必须通过 ImageView 来访问 Image
+		textureImageView = createImageView(textureImage, vk::Format::eR8G8B8A8Srgb, vk::ImageAspectFlagBits::eColor);        // 创建纹理图像的视图（着色器必须通过 ImageView 来访问 Image
 	}
 
 	void createTextureSampler()
@@ -640,7 +640,7 @@ class HelloTriangleApplication
 		textureSampler = vk::raii::Sampler(device, samplerInfo);
 	}
 
-	vk::raii::ImageView createImageView(vk::raii::Image &image, vk::Format format)
+	vk::raii::ImageView createImageView(vk::raii::Image &image, vk::Format format, vk::ImageAspectFlagBits aspectFlags)
 	{
 		vk::ImageViewCreateInfo viewInfo{
 		    .image            = image,                         // 要为哪个 Image 对象创建视图
@@ -648,8 +648,8 @@ class HelloTriangleApplication
 		    .format           = format,                        // 指定数据的解释方式（通常与 Image 格式一致）（自动 Gamma 校正）（D32_SFLOAT_S8_UINT 格式下，需要对深度与模板缓冲做格式分离，一个是浮点，一个是 UINT 格式）
 		    .subresourceRange = {
 		        // 视图可以看到图像的哪些部分
-		        vk::ImageAspectFlagBits::eColor,        // 访问颜色分量
-		        0,                                      // mipmap 层级，从 0 开始，共 1 层
+		        aspectFlags,        // 可以访问的分量
+		        0,                  // mipmap 层级，从 0 开始，共 1 层
 		        1,
 		        0,        // 数组层级， 从 0 开始，共 1 层
 		        1,
@@ -1053,14 +1053,38 @@ class HelloTriangleApplication
 
 	void createDepthResources()
 	{
+		vk::Format depthFormat = findDepthFormat();        // 确定使用格式
+		createImage(swapChainExtent.width, swapChainExtent.height, depthFormat,
+		            vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eDepthStencilAttachment,
+		            vk::MemoryPropertyFlagBits::eDeviceLocal, depthImage, depthImageMemory);               // 创建图像对象并分配显存
+		depthImageView = createImageView(depthImage, depthFormat, vk::ImageAspectFlagBits::eDepth);        // 创建图像视图
 	}
 
-	vk::Format findSupportedFormat(const std::vector<vk::Format> &candidates, vk::ImageTiling tiling, vk::FormatFeatureFlagBits features)
+	vk::Format findSupportedFormat(
+	    const std::vector<vk::Format> &candidates,        // 候选格式列表
+	    vk::ImageTiling                tiling,            // 请求的平铺模式
+	    vk::FormatFeatureFlagBits      features           // 请求格式必须支持的特性（位标志）
+	)
 	{
+		// 遍历所有候选格式
+		for (auto format : candidates)
+		{
+			vk::FormatProperties props = physicalDevice.getFormatProperties(format);
+			if (tiling == vk::ImageTiling::eLinear && (props.linearTilingFeatures & features) == features)        // 请求的是线性平铺，且该候选格式在线性平铺模式下支持所有请求的特性
+				return format;
+			if (tiling == vk::ImageTiling::eOptimal && (props.optimalTilingFeatures & features) == features)        // 请求的是最优平铺，且该候选格式在线性平铺模式下支持所有请求的特性
+				return format;
+		}
+		throw std::runtime_error("failed to find supported format");
 	}
 
 	vk::Format findDepthFormat()
 	{
+		return findSupportedFormat(
+		    {vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint},        // 候选格式列表
+		    vk::ImageTiling::eOptimal,                                                                  // 平铺模式
+		    vk::FormatFeatureFlagBits::eDepthStencilAttachment                                          // 特性要求
+		);
 	}
 
 	void recordCommandBuffer(uint32_t imageIndex)
@@ -1069,31 +1093,51 @@ class HelloTriangleApplication
 		commandBuffer.begin({});        // 开始录制命令
 
 		transition_image_layout(        // 设置管线屏障，这里是对图像内存布局转化做同步
-		    imageIndex,
+		    swapChainImages[imageIndex],
 		    vk::ImageLayout::eUndefined,                               // 不关心图像的原布局（因为不保留原内容）
 		    vk::ImageLayout::eColorAttachmentOptimal,                  // 将图像布局切换为颜色附件最优布局
 		    {},                                                        // 无需对源阶段地输出结果做任何同步处理（从源阶段缓存写入内存）
 		    vk::AccessFlagBits2::eColorAttachmentWrite,                // 颜色写入操作（动作）（真正参与同步的操作）（一个流水线阶段有多个操作，不是每个都要参与同步）
 		    vk::PipelineStageFlagBits2::eColorAttachmentOutput,        // 上一颜色写入阶段（时间点）（该阶段一定在屏障前结束）（确保颜色写入结束后，才做图像内存布局转换）
-		    vk::PipelineStageFlagBits2::eColorAttachmentOutput         // 下一颜色写入阶段（时间点）（该阶段一定在屏障后开始）（确保图像内存布局转换结束后，才执行颜色写入）
-		);
+		    vk::PipelineStageFlagBits2::eColorAttachmentOutput,        // 下一颜色写入阶段（时间点）（该阶段一定在屏障后开始）（确保图像内存布局转换结束后，才执行颜色写入）
+		    vk::ImageAspectFlagBits::eColor);
+
+		transition_image_layout(
+		    *depthImage,
+		    vk::ImageLayout::eUndefined,
+		    vk::ImageLayout::eDepthAttachmentOptimal,
+		    vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+		    vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
+		    vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+		    vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+		    vk::ImageAspectFlagBits::eDepth);
 
 		vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);        // 定义清除颜色
+		vk::ClearValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
 
 		// 颜色附件信息
-		vk::RenderingAttachmentInfo attachmentInfo = {
+		vk::RenderingAttachmentInfo colorAttachmentInfo = {
 		    .imageView   = swapChainImageViews[imageIndex],
 		    .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
 		    .loadOp      = vk::AttachmentLoadOp::eClear,
 		    .storeOp     = vk::AttachmentStoreOp::eStore,        // 渲染结果要从缓存写会显存（最后阶段的深度缓冲就可以选择不写入，优化性能）（多重抗锯齿的 MSAA 原图用完也不用写回显存）
 		    .clearValue  = clearColor};
 
+		// 深度附件信息
+		vk::RenderingAttachmentInfo depthAttachmentInfo = {
+		    .imageView   = depthImageView,
+		    .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
+		    .loadOp      = vk::AttachmentLoadOp::eClear,            // 清除旧深度
+		    .storeOp     = vk::AttachmentStoreOp::eDontCare,        // 渲染完后无需保留深度图
+		    .clearValue  = clearDepth};
+
 		// 渲染信息
 		vk::RenderingInfo renderingInfo = {
 		    .renderArea           = {.offset = {0, 0}, .extent = swapChainExtent},        // 渲染区域，从左上角（0，0）向右下渲染 extent 宽高大小的图
 		    .layerCount           = 1,                                                    // 纹理层数
 		    .colorAttachmentCount = 1,                                                    // 颜色附件数量
-		    .pColorAttachments    = &attachmentInfo                                       // 颜色附件信息结构体
+		    .pColorAttachments    = &colorAttachmentInfo,                                 // 链接颜色附件
+		    .pDepthAttachment     = &depthAttachmentInfo                                  // 链接深度附件
 		};
 
 		commandBuffer.beginRendering(renderingInfo);        // 开始动态渲染
@@ -1142,45 +1186,46 @@ class HelloTriangleApplication
 
 		// 转换图像的布局
 		transition_image_layout(
-		    imageIndex,
+		    swapChainImages[imageIndex],
 		    vk::ImageLayout::eColorAttachmentOptimal,
 		    vk::ImageLayout::ePresentSrcKHR,
 		    vk::AccessFlagBits2::eColorAttachmentWrite,
 		    {},
 		    vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-		    vk::PipelineStageFlagBits2::eBottomOfPipe);
+		    vk::PipelineStageFlagBits2::eBottomOfPipe,
+		    vk::ImageAspectFlagBits::eColor);
 
 		commandBuffer.end();        // 结束录制
 	}
 
 	void transition_image_layout(
-	    uint32_t                imageIndex,             // Swapchain 中的哪一张图
+	    vk::Image               image,                  // Swapchain 中的哪一张图
 	    vk::ImageLayout         old_layout,             // 初始布局
 	    vk::ImageLayout         new_layout,             // 目标布局
 	    vk::AccessFlags2        src_access_mask,        // 内存操作（何种读写动作）
 	    vk::AccessFlags2        dst_access_mask,        // 内存操作（何种读写动作）
 	    vk::PipelineStageFlags2 src_stage_mask,         // 源流水线阶段 （时间点）
-	    vk::PipelineStageFlags2 dst_stage_mask          // 目标流水线阶段（时间点）
-	)
+	    vk::PipelineStageFlags2 dst_stage_mask,         // 目标流水线阶段（时间点）
+	    vk::ImageAspectFlags    image_aspect_flags)
 	{
 		// 图像内存屏障
 		vk::ImageMemoryBarrier2 barrier = {
-		    .srcStageMask        = src_stage_mask,                     // 屏障执行前，必须完成的流水线阶段（屏障之中，执行图像的布局转换操作）
-		    .srcAccessMask       = src_access_mask,                    // 屏障执行前，等源流水线阶段完成后，将其缓存中需要同步的数据类型写入显存（确保可见性）
-		    .dstStageMask        = dst_stage_mask,                     // 屏障执行后，才能开始的流水线阶段（阻塞）
-		    .dstAccessMask       = dst_access_mask,                    // 屏障执行后，目标流水线阶段缓存中的需要同步的数据设置为过期（着色器使用缓存数据时，发现数据过期会自动去显存拉取最新数据，从而完成数据同步）
-		    .oldLayout           = old_layout,                         // 图像当前内存布局（内存布局就是图像像素的物理排列方式，知道内存布局才知道（x，y）对应的内存地址在哪）
-		    .newLayout           = new_layout,                         // 图像转换后的内存布局
-		    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,            // 源队列族索引（此处由于是在同一队列族内同步，所以不需要考虑图像所有权在不同队列族间的转移）（对于独占模式的图像，同一时间只能为一个队列族所占有，仅占有它的队列族才能读写，所以此处需要交接图像的所有权）
-		    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,            // 目标队列族索引
-		    .image               = swapChainImages[imageIndex],        // 需要同步的图像
-		    .subresourceRange    =                                     // 图像的哪些部分需要同步
+		    .srcStageMask        = src_stage_mask,                 // 屏障执行前，必须完成的流水线阶段（屏障之中，执行图像的布局转换操作）
+		    .srcAccessMask       = src_access_mask,                // 屏障执行前，等源流水线阶段完成后，将其缓存中需要同步的数据类型写入显存（确保可见性）
+		    .dstStageMask        = dst_stage_mask,                 // 屏障执行后，才能开始的流水线阶段（阻塞）
+		    .dstAccessMask       = dst_access_mask,                // 屏障执行后，目标流水线阶段缓存中的需要同步的数据设置为过期（着色器使用缓存数据时，发现数据过期会自动去显存拉取最新数据，从而完成数据同步）
+		    .oldLayout           = old_layout,                     // 图像当前内存布局（内存布局就是图像像素的物理排列方式，知道内存布局才知道（x，y）对应的内存地址在哪）
+		    .newLayout           = new_layout,                     // 图像转换后的内存布局
+		    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,        // 源队列族索引（此处由于是在同一队列族内同步，所以不需要考虑图像所有权在不同队列族间的转移）（对于独占模式的图像，同一时间只能为一个队列族所占有，仅占有它的队列族才能读写，所以此处需要交接图像的所有权）
+		    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,        // 目标队列族索引
+		    .image               = image,                          // 需要同步的图像
+		    .subresourceRange    =                                 // 图像的哪些部分需要同步
 		    {
-		        .aspectMask     = vk::ImageAspectFlagBits::eColor,        // 图像的哪些通道需要同步
-		        .baseMipLevel   = 0,                                      // Mipmap 起始层（需要同步的 Mapmap 层级范围）
-		        .levelCount     = 1,                                      // 从起点开始，连续选中多少层 Mipmap
-		        .baseArrayLayer = 0,                                      // 纹理数组起始层（需要同步的纹理数组范围）
-		        .layerCount     = 1                                       // 从起点开始，连续选中多少层纹理
+		        .aspectMask     = image_aspect_flags,        // 图像的哪些通道需要同步
+		        .baseMipLevel   = 0,                         // Mipmap 起始层（需要同步的 Mapmap 层级范围）
+		        .levelCount     = 1,                         // 从起点开始，连续选中多少层 Mipmap
+		        .baseArrayLayer = 0,                         // 纹理数组起始层（需要同步的纹理数组范围）
+		        .layerCount     = 1                          // 从起点开始，连续选中多少层纹理
 		    }};
 
 		vk::DependencyInfo dependency_info = {
