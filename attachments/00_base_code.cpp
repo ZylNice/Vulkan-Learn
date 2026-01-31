@@ -17,16 +17,24 @@ import vulkan_hpp;
 #define GLFW_INCLUDE_VULKAN        // 导入 glfwCreateWindowSurface 函数（条件编译 glfw3.h）
 #include <GLFW/glfw3.h>
 
-#define GLM_FORCE_RADIANS        // 强制 GLM 使用弧度制（Vulkan 和 GLM 推荐）
+#define GLM_FORCE_RADIANS                  // 强制 GLM 使用弧度制（Vulkan 和 GLM 推荐）
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE        // 强制 GLM 生成的透视投影矩阵将深度值（Z轴）映射到 [0, 1] 范围
+#define GLM_ENABLE_EXPERIMENTAL
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtx/hash.hpp>        //引入 GLM 的哈希扩展，用于计算 glm::vec3 等类型的哈希值
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
-const uint32_t WIDTH                = 800;
-const uint32_t HEIGHT               = 600;
-constexpr int  MAX_FRAMES_IN_FLIGHT = 2;
+#define TINYOBJLOADER_IMPLEMENTATION
+#include <tiny_obj_loader.h>
+
+const uint32_t    WIDTH                = 800;
+const uint32_t    HEIGHT               = 600;
+const std::string MODEL_PATH           = "models/viking_room.obj";
+const std::string TEXTURE_PATH         = "textures/viking_room.png";
+constexpr int     MAX_FRAMES_IN_FLIGHT = 2;
 
 const std::vector<char const *> validationLayers = {"VK_LAYER_KHRONOS_validation"};
 
@@ -72,6 +80,22 @@ struct Vertex
 		        vk::Format::eR32G32Sfloat,
 		        offsetof(Vertex, texCoord))};
 	}
+	bool operator==(const Vertex &other) const
+	{
+		return pos == other.pos && color == other.color && texCoord == other.texCoord;
+	}
+};
+
+template <>
+struct std::hash<Vertex>
+{
+	size_t operator()(Vertex const &vertex) const noexcept
+	{
+		return ((hash<glm::vec3>()(vertex.pos) ^
+		         (hash<glm::vec3>()(vertex.color) << 1)) >>
+		        1) ^
+		       (hash<glm::vec2>()(vertex.texCoord) << 1);
+	}
 };
 
 struct UniformBufferObject
@@ -81,20 +105,20 @@ struct UniformBufferObject
 	glm::mat4 proj;         // 投影矩阵
 };
 
-const std::vector<Vertex> vertices = {
-    {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-    {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-    {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-    {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
-
-    {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-    {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-    {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-    {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}};
-
-const std::vector<uint16_t> indices = {
-    0, 1, 2, 2, 3, 0,
-    4, 5, 6, 6, 7, 4};
+// const std::vector<Vertex> vertices = {
+//     {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+//     {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+//     {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+//     {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
+//
+//     {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
+//     {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
+//     {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
+//     {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}};
+//
+// const std::vector<uint16_t> indices = {
+//     0, 1, 2, 2, 3, 0,
+//     4, 5, 6, 6, 7, 4};
 
 class HelloTriangleApplication
 {
@@ -136,6 +160,8 @@ class HelloTriangleApplication
 	vk::raii::ImageView    textureImageView   = nullptr;
 	vk::raii::Sampler      textureSampler     = nullptr;
 
+	std::vector<Vertex>    vertices;
+	std::vector<uint32_t>  indices;
 	vk::raii::Buffer       vertexBuffer       = nullptr;        // 顶点缓冲区句柄（描述大小和用途）(Buffer 一定对 GPU 可见，不一定对 CPU 可见)
 	vk::raii::DeviceMemory vertexBufferMemory = nullptr;        // 顶点缓冲区内存对象（实际显存）
 	vk::raii::Buffer       indexBuffer        = nullptr;        // 索引缓冲区句柄
@@ -198,6 +224,7 @@ class HelloTriangleApplication
 		createTextureImage();
 		createTextureImageView();
 		createTextureSampler();
+		loadModel();
 		createVertexBuffer();
 		createIndexBuffer();
 		createUniformBuffers();
@@ -581,7 +608,7 @@ class HelloTriangleApplication
 	{
 		// 使用 STB 库加载图像数据
 		int            texWidth, texHeight, texChannels;
-		stbi_uc       *pixels    = stbi_load("textures/texture.jpg", &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);        // STBI_rgb_alpha 表示强制加载 alpha 通道，即使原图没有
+		stbi_uc       *pixels    = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);        // STBI_rgb_alpha 表示强制加载 alpha 通道，即使原图没有
 		vk::DeviceSize imageSize = texWidth * texHeight * 4;
 		if (!pixels)
 		{
@@ -779,6 +806,48 @@ class HelloTriangleApplication
 		    {region}                                     // 拷贝区域列表（可以一次拷贝多个区域）
 		);
 		endSingleTimeCommands(*commandBuffer);
+	}
+
+	void loadModel()
+	{
+		tinyobj::attrib_t                attrib;           // 存储所有顶点的位置、法线、纹理坐标等属性数据（OBJ 文件保证"零件"层面的去重）
+		std::vector<tinyobj::shape_t>    shapes;           // 模型里的对象列表
+		std::vector<tinyobj::material_t> materials;        // 材质信息
+		std::string                      warn, err;        // 警告信息/错误信息
+
+		if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, MODEL_PATH.c_str()))
+		{
+			throw std::runtime_error(warn + err);
+		}
+
+		std::unordered_map<Vertex, uint32_t> uniqueVertices{};
+
+		for (const auto &shape : shapes)
+		{
+			for (const auto &index : shape.mesh.indices)
+			{
+				Vertex vertex{};
+
+				vertex.pos = {
+				    attrib.vertices[3 * index.vertex_index + 0],
+				    attrib.vertices[3 * index.vertex_index + 1],
+				    attrib.vertices[3 * index.vertex_index + 2]};
+
+				vertex.texCoord = {
+				    attrib.texcoords[2 * index.texcoord_index + 0],
+				    1.0f - attrib.texcoords[2 * index.texcoord_index + 1]};        // Vulkan、OpenGL 纹理坐标原点在左上角
+
+				vertex.color = {1.0f, 1.0f, 1.0f};
+
+				if (!uniqueVertices.contains(vertex))        // 共用顶点去重（非共用顶点不会被去重)
+				{
+					uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());        // 记录该顶点在实际缓冲区中的索引
+					vertices.push_back(vertex);
+				}
+
+				indices.push_back(uniqueVertices[vertex]);        // 将实际索引，加入顶点缓冲区
+			}
+		}
 	}
 
 	void createVertexBuffer()

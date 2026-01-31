@@ -173,9 +173,10 @@ function (add_chapter CHAPTER_NAME)
 endfunction ()
 
 add_chapter (00_base_code
-    SHADER 09_shader_base
-    TEXTURES ../../images/texture.jpg
-    LIBS glm::glm)
+  SHADER 09_shader_base
+  MODELS viking_room.obj
+  TEXTURES viking_room.png
+  LIBS glm::glm tinyobjloader::tinyobjloader)
 
 add_chapter (01_instance_creation)
 
