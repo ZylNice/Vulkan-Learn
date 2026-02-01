@@ -160,7 +160,7 @@ class HelloTriangleApplication
 
 	std::vector<vk::raii::Buffer>       uniformBuffers;              // 统一缓冲区句柄
 	std::vector<vk::raii::DeviceMemory> uniformBuffersMemory;        // 统一缓冲区内存对象
-	std::vector<void *>                 uniformBuffersMapped;        // 持久映射指针（避免频繁调用 map/unmap）
+	std::vector<void *>                 uniformBuffersMapped;        // 持久映射指针（避免频繁调用 map/unmap）（用于更新 UBO 中的 MVP 矩阵）
 
 	vk::raii::DescriptorPool             descriptorPool = nullptr;        // 描述符池
 	std::vector<vk::raii::DescriptorSet> descriptorSets;                  // 描述符集
@@ -480,6 +480,7 @@ class HelloTriangleApplication
 	void createDescriptorSetLayout()
 	{
 		std::array bindings = {
+		    // MVP 矩阵
 		    vk::DescriptorSetLayoutBinding(
 		        0,                                         // 描述符集布局绑定点（layout(binding = 0)）
 		        vk::DescriptorType::eUniformBuffer,        // 描述符类型（统一缓冲区，UBO）
@@ -487,6 +488,7 @@ class HelloTriangleApplication
 		        vk::ShaderStageFlagBits::eVertex,          // 仅在顶点着色器阶段使用
 		        nullptr                                    // (图像采样器才需要，这里为空)
 		        ),
+		    // 图像采样器
 		    vk::DescriptorSetLayoutBinding(
 		        1,
 		        vk::DescriptorType::eCombinedImageSampler,
@@ -668,8 +670,8 @@ class HelloTriangleApplication
 		// 使用 STB 库加载图像数据
 		int            texWidth, texHeight, texChannels;
 		stbi_uc       *pixels    = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);        // STBI_rgb_alpha 表示强制加载 alpha 通道，即使原图没有
-		vk::DeviceSize imageSize = texWidth * texHeight * 4;
-		mipLevels                = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;        // 根据图像尺寸计算 Mipmap 层级数（+1 是包含原图层级）
+		vk::DeviceSize imageSize = texWidth * texHeight * 4;                                                                    // 4 是每个像素的字节数
+		mipLevels                = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;             // 根据图像尺寸计算 Mipmap 层级数（+1 是包含原图层级）
 
 		if (!pixels)
 		{
@@ -1499,7 +1501,7 @@ class HelloTriangleApplication
 		commandBuffers[frameIndex].pipelineBarrier2(dependency_info);        // 录制屏障指令
 	}
 
-	// 创建每帧的同步对象
+	// 创建每帧的同步对象（信号量是跨队列同步，管线屏障是同队列的不同命令的同步，栅栏是 CPU 与 GPU 同步）
 	void createSyncObjects()
 	{
 		assert(presentCompleteSemphores.empty() && renderFinishedSemphores.empty() && inFlightFences.empty());
