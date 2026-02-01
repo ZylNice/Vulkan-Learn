@@ -121,20 +121,25 @@ class HelloTriangleApplication
 	vk::raii::Context                context;
 	vk::raii::Instance               instance       = nullptr;
 	vk::raii::DebugUtilsMessengerEXT debugMessenger = nullptr;
-	vk::raii::SurfaceKHR             surface        = nullptr;        // 窗口表面
-	vk::raii::PhysicalDevice         physicalDevice = nullptr;        // 使用的显卡
-	vk::raii::Device                 device         = nullptr;        // 逻辑设备
-	uint32_t                         queueIndex     = ~0;             // 队列族索引，初始化为最大整数，作为无效值标记
-	vk::raii::Queue                  queue          = nullptr;        // 队列（同时支持图形和显示）（Vulkan 规定，凡是支持图形/计算的队列族，默认强制支持传输（Transfer）操作）
-	vk::raii::SwapchainKHR           swapChain      = nullptr;
-	std::vector<vk::Image>           swapChainImages;               // 交换链中的图像
-	vk::SurfaceFormatKHR             swapChainSurfaceFormat;        // 交换链中图像格式
-	vk::Extent2D                     swapChainExtent;               // 交换链中图像分辨率
-	std::vector<vk::raii::ImageView> swapChainImageViews;           // 管线通过 imageview 接口，访问交换链中的图像
+	vk::raii::SurfaceKHR             surface        = nullptr;                            // 窗口表面
+	vk::raii::PhysicalDevice         physicalDevice = nullptr;                            // 使用的显卡
+	vk::SampleCountFlagBits          msaaSamples    = vk::SampleCountFlagBits::e1;        // 存储硬件支持的最大采样数
+	vk::raii::Device                 device         = nullptr;                            // 逻辑设备
+	uint32_t                         queueIndex     = ~0;                                 // 队列族索引，初始化为最大整数，作为无效值标记
+	vk::raii::Queue                  queue          = nullptr;                            // 队列（同时支持图形和显示）（Vulkan 规定，凡是支持图形/计算的队列族，默认强制支持传输（Transfer）操作）
+	vk::raii::SwapchainKHR           swapChain      = nullptr;                            //
+	std::vector<vk::Image>           swapChainImages;                                     // 交换链中的图像
+	vk::SurfaceFormatKHR             swapChainSurfaceFormat;                              // 交换链中图像格式
+	vk::Extent2D                     swapChainExtent;                                     // 交换链中图像分辨率
+	std::vector<vk::raii::ImageView> swapChainImageViews;                                 // 管线通过 imageview 接口，访问交换链中的图像
 
 	vk::raii::DescriptorSetLayout descriptorSetLayout = nullptr;
 	vk::raii::PipelineLayout      pipelineLayout      = nullptr;        // 管线布局
 	vk::raii::Pipeline            graphicsPipeline    = nullptr;        // 图形管线对象
+
+	vk::raii::Image        colorImage       = nullptr;        // 多重采样的颜色缓冲区
+	vk::raii::DeviceMemory colorImageMemory = nullptr;
+	vk::raii::ImageView    colorImageView   = nullptr;
 
 	vk::raii::Image        depthImage       = nullptr;
 	vk::raii::DeviceMemory depthImageMemory = nullptr;
@@ -194,18 +199,21 @@ class HelloTriangleApplication
 		app->framebufferResized = true;
 	}
 
+	// Vulkan 初始化
 	void initVulkan()
 	{
 		createInstance();
 		setupDebugMessenger();
 		createSurface();
 		pickPhysicalDevice();
+		msaaSamples = getMaxUsableSampleCount();
 		createLogicalDevice();
 		createSwapChain();
 		createImageViews();
 		createDescriptorSetLayout();
 		createGraphicsPipeline();
 		createCommandPool();
+		createColorResources();
 		createDepthResources();
 		createTextureImage();
 		createTextureImageView();
@@ -220,6 +228,7 @@ class HelloTriangleApplication
 		createSyncObjects();
 	}
 
+	// 主循环
 	void mainLoop()
 	{
 		while (!glfwWindowShouldClose(window))
@@ -230,6 +239,12 @@ class HelloTriangleApplication
 		device.waitIdle();        // 避免在 GPU 结束工作前关闭窗口，释放显存资源，导致 GPU 非法访问释放的资源，进而驱动崩溃
 	}
 
+	void cleanupSwapChain()
+	{
+		swapChainImageViews.clear();        // 清空旧的 imageView
+		swapChain = nullptr;                // 通过 RAII 销毁旧的交换链
+	}
+
 	void cleanup()
 	{
 		glfwDestroyWindow(window);        // 销毁窗口
@@ -237,6 +252,7 @@ class HelloTriangleApplication
 		glfwTerminate();        // 清理 glfw 资源
 	}
 
+	// 重建交换链（窗口大小改变时调用）
 	void recreateSwapChain()
 	{
 		int width = 0, height = 0;
@@ -252,15 +268,11 @@ class HelloTriangleApplication
 		cleanupSwapChain();
 		createSwapChain();
 		createImageViews();
+		createColorResources();
 		createDepthResources();
 	}
 
-	void cleanupSwapChain()
-	{
-		swapChainImageViews.clear();        // 清空旧的 imageView
-		swapChain = nullptr;                // 通过 RAII 销毁旧的交换链
-	}
-
+	// 创建 Vulkan 实例
 	void createInstance()
 	{
 		constexpr vk::ApplicationInfo appInfo{
@@ -305,6 +317,7 @@ class HelloTriangleApplication
 		instance = vk::raii::Instance(context, createInfo);
 	}
 
+	// 设置调试回调
 	void setupDebugMessenger()
 	{
 		if (!enableValidationLayers)
@@ -334,6 +347,7 @@ class HelloTriangleApplication
 		surface = vk::raii::SurfaceKHR(instance, _surface);
 	}
 
+	// 选择物理设备
 	void pickPhysicalDevice()
 	{
 		std::vector<vk::raii::PhysicalDevice> devices = instance.enumeratePhysicalDevices();        // 获取所有物理设备
@@ -378,6 +392,7 @@ class HelloTriangleApplication
 		}
 	}
 
+	// 创建逻辑设备
 	void createLogicalDevice()
 	{
 		std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
@@ -418,6 +433,7 @@ class HelloTriangleApplication
 		queue  = vk::raii::Queue(device, queueIndex, 0);        // 获取图形队列族的 0 号队列
 	}
 
+	// 创建交换链
 	void createSwapChain()
 	{
 		auto surfaceCapabilities = physicalDevice.getSurfaceCapabilitiesKHR(*surface);
@@ -460,6 +476,7 @@ class HelloTriangleApplication
 		}
 	}
 
+	// 创建描述符布局
 	void createDescriptorSetLayout()
 	{
 		std::array bindings = {
@@ -486,6 +503,7 @@ class HelloTriangleApplication
 		descriptorSetLayout = vk::raii::DescriptorSetLayout(device, layoutInfo);        // 创建描述符集布局（一个描述符集布局可以有多个绑定点，每个绑定点可以绑定多个同类型的描述符）
 	}
 
+	// 创建图形管线
 	void createGraphicsPipeline()
 	{
 		vk::raii::ShaderModule shaderModule = createShaderModule(readFile("shaders/slang.spv"));
@@ -517,7 +535,7 @@ class HelloTriangleApplication
 
 		// 多重采样
 		vk::PipelineMultisampleStateCreateInfo multisampling{
-		    .rasterizationSamples = vk::SampleCountFlagBits::e1,        // 采样数为 1（关闭 MSAA）
+		    .rasterizationSamples = msaaSamples,        // MSAA
 		    .sampleShadingEnable  = vk::False};
 
 		// 深度与模板状态配置
@@ -590,6 +608,61 @@ class HelloTriangleApplication
 		commandPool = vk::raii::CommandPool(device, poolInfo);
 	}
 
+	// 创建颜色资源（MSAA）
+	void createColorResources()
+	{
+		vk::Format colorFormat = swapChainSurfaceFormat.format;
+
+		// 创建一个瞬态（Transient）图像作为 MSAA 颜色附件（Transient 标志表示此图像的数据解析后即可丢弃，这对于 Tile-based GPU 的性能非常重要）
+		createImage(swapChainExtent.width, swapChainExtent.height, 1, msaaSamples, colorFormat, vk::ImageTiling::eOptimal,
+		            vk::ImageUsageFlagBits::eTransientAttachment | vk::ImageUsageFlagBits::eColorAttachment,
+		            vk::MemoryPropertyFlagBits::eDeviceLocal, colorImage, colorImageMemory);
+		colorImageView = createImageView(colorImage, colorFormat, vk::ImageAspectFlagBits::eColor, 1);
+	}
+
+	// 创建深度资源（MSAA）
+	void createDepthResources()
+	{
+		vk::Format depthFormat = findDepthFormat();        // 确定使用格式
+		createImage(swapChainExtent.width, swapChainExtent.height, 1, msaaSamples, depthFormat,
+		            vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eDepthStencilAttachment,
+		            vk::MemoryPropertyFlagBits::eDeviceLocal, depthImage, depthImageMemory);                  // 创建图像对象并分配显存
+		depthImageView = createImageView(depthImage, depthFormat, vk::ImageAspectFlagBits::eDepth, 1);        // 创建图像视图
+	}
+
+	vk::Format findSupportedFormat(
+	    const std::vector<vk::Format> &candidates,        // 候选格式列表
+	    vk::ImageTiling                tiling,            // 请求的平铺模式
+	    vk::FormatFeatureFlagBits      features           // 请求格式必须支持的特性（位标志）
+	)
+	{
+		// 遍历所有候选格式
+		for (auto format : candidates)
+		{
+			vk::FormatProperties props = physicalDevice.getFormatProperties(format);
+			if (tiling == vk::ImageTiling::eLinear && (props.linearTilingFeatures & features) == features)        // 请求的是线性平铺，且该候选格式在线性平铺模式下支持所有请求的特性
+				return format;
+			if (tiling == vk::ImageTiling::eOptimal && (props.optimalTilingFeatures & features) == features)        // 请求的是最优平铺，且该候选格式在线性平铺模式下支持所有请求的特性
+				return format;
+		}
+		throw std::runtime_error("failed to find supported format");
+	}
+
+	vk::Format findDepthFormat()
+	{
+		return findSupportedFormat(
+		    {vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint},        // 候选格式列表
+		    vk::ImageTiling::eOptimal,                                                                  // 平铺模式
+		    vk::FormatFeatureFlagBits::eDepthStencilAttachment                                          // 特性要求
+		);
+	}
+
+	static bool hasStencilComponent(vk::Format format)
+	{
+		return format == vk::Format::eD32SfloatS8Uint || format == vk::Format::eD24UnormS8Uint;
+	}
+
+	// 创建纹理
 	void createTextureImage()
 	{
 		// 使用 STB 库加载图像数据
@@ -618,6 +691,7 @@ class HelloTriangleApplication
 		createImage(texWidth,
 		            texHeight,
 		            mipLevels,
+		            vk::SampleCountFlagBits::e1,
 		            vk::Format::eR8G8B8A8Srgb,
 		            vk::ImageTiling::eOptimal,
 		            vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
@@ -628,10 +702,10 @@ class HelloTriangleApplication
 		// 图像布局转换与复制
 		transitionImageLayout(textureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, mipLevels);        // 将图像改为适合 GPU 拷贝引擎高效写入的格式
 		copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
-		// transitionImageLayout(textureImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);        // 将图像改为适合 Shader 高效读取的格式
 		generateMipmaps(textureImage, vk::Format::eR8G8B8A8Srgb, texWidth, texHeight, mipLevels);
 	}
 
+	// 生成 Mipmap
 	void generateMipmaps(vk::raii::Image &image, vk::Format imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels)
 	{
 		// 向 GPU 查询，对于这种图像格式，在使用 GPU 优化排布时，是否支持线性过滤
@@ -727,6 +801,41 @@ class HelloTriangleApplication
 		endSingleTimeCommands(*commandBuffer);
 	}
 
+	vk::SampleCountFlagBits getMaxUsableSampleCount()
+	{
+		vk::PhysicalDeviceProperties physicalDeviceProperties = physicalDevice.getProperties();
+
+		vk::SampleCountFlags counts = physicalDeviceProperties.limits.framebufferColorSampleCounts &        // 我们必须选择一个颜色和深度都支持的采样数
+		                              physicalDeviceProperties.limits.framebufferDepthSampleCounts;
+
+		if (counts & vk::SampleCountFlagBits::e64)
+		{
+			return vk::SampleCountFlagBits::e64;
+		}
+		if (counts & vk::SampleCountFlagBits::e32)
+		{
+			return vk::SampleCountFlagBits::e32;
+		}
+		if (counts & vk::SampleCountFlagBits::e16)
+		{
+			return vk::SampleCountFlagBits::e16;
+		}
+		if (counts & vk::SampleCountFlagBits::e8)
+		{
+			return vk::SampleCountFlagBits::e8;
+		}
+		if (counts & vk::SampleCountFlagBits::e4)
+		{
+			return vk::SampleCountFlagBits::e4;
+		}
+		if (counts & vk::SampleCountFlagBits::e2)
+		{
+			return vk::SampleCountFlagBits::e2;
+		}
+
+		return vk::SampleCountFlagBits::e1;
+	}
+
 	void createTextureImageView()
 	{
 		textureImageView = createImageView(textureImage, vk::Format::eR8G8B8A8Srgb, vk::ImageAspectFlagBits::eColor, mipLevels);        // 创建纹理图像的视图（着色器必须通过 ImageView 来访问 Image
@@ -755,6 +864,7 @@ class HelloTriangleApplication
 		textureSampler = vk::raii::Sampler(device, samplerInfo);
 	}
 
+	// 辅助函数，创建 ImageView（描述如何访问 Image）
 	vk::raii::ImageView createImageView(vk::raii::Image &image, vk::Format format, vk::ImageAspectFlagBits aspectFlags, uint32_t mipLevels) const
 	{
 		vk::ImageViewCreateInfo viewInfo{
@@ -772,9 +882,11 @@ class HelloTriangleApplication
 		return vk::raii::ImageView(device, viewInfo);
 	}
 
+	// 辅助函数，创建 Image（分配显存并绑定）
 	void createImage(uint32_t                width,              // 图像宽度
 	                 uint32_t                height,             // 图像高度
 	                 uint32_t                mipLevels,          // Mipmap 层级数
+	                 vk::SampleCountFlagBits numSamples,         //
 	                 vk::Format              format,             // 图像格式
 	                 vk::ImageTiling         tiling,             // 图像数据的内存排列模式（ImageTiling 在图像创建后不可更改，ImageLayout 在图像创建后可更改）
 	                 vk::ImageUsageFlags     usage,              // 图像的用途标志位
@@ -783,15 +895,15 @@ class HelloTriangleApplication
 	                 vk::raii::DeviceMemory &imageMemory)        // 图像显存对象（传出参数）
 	{
 		vk::ImageCreateInfo imageInfo{
-		    .imageType   = vk::ImageType::e2D,                 // 图像类型，1D/2D/3D
-		    .format      = format,                             // 像素格式，指定颜色通道的排列和大小
-		    .extent      = {width, height, 1},                 // 图像范围（宽，高，深），2D 图像的深度是 1
-		    .mipLevels   = mipLevels,                          // MIP 贴图级别数量
-		    .arrayLayers = 1,                                  // 纹理数组层数，这里 1 表示不是纹理数组
-		    .samples     = vk::SampleCountFlagBits::e1,        // 多重采样计数，e1 表示每像素 1 个样本（不启用 MSAA）
-		    .tiling      = tiling,                             // 内存平铺模式，（eLinear：线性排列，CPU 可直接读取，但在 GPU 上性能差）（eOptimal：硬件特定的优化排列，GPU 性能最佳，但 CPU 无法直接读取）
-		    .usage       = usage,                              // 纹理的用途标志
-		    .sharingMode = vk::SharingMode::eExclusive         // 队列族共享模式
+		    .imageType   = vk::ImageType::e2D,                // 图像类型，1D/2D/3D
+		    .format      = format,                            // 像素格式，指定颜色通道的排列和大小
+		    .extent      = {width, height, 1},                // 图像范围（宽，高，深），2D 图像的深度是 1
+		    .mipLevels   = mipLevels,                         // MIP 贴图级别数量
+		    .arrayLayers = 1,                                 // 纹理数组层数，这里 1 表示不是纹理数组
+		    .samples     = numSamples,                        // 多重采样的采样数
+		    .tiling      = tiling,                            // 内存平铺模式，（eLinear：线性排列，CPU 可直接读取，但在 GPU 上性能差）（eOptimal：硬件特定的优化排列，GPU 性能最佳，但 CPU 无法直接读取）
+		    .usage       = usage,                             // 纹理的用途标志
+		    .sharingMode = vk::SharingMode::eExclusive        // 队列族共享模式
 		};
 
 		image = vk::raii::Image(device, imageInfo);        // 创建图像句柄
@@ -805,7 +917,7 @@ class HelloTriangleApplication
 		image.bindMemory(imageMemory, 0);        // 绑定实际显存，偏移量为 0
 	}
 
-	// 在预处理阶段的屏障
+	// 辅助函数，图像布局转换（预处理阶段的屏障）
 	void transitionImageLayout(const vk::raii::Image &image,            // 需要转换布局的图像
 	                           vk::ImageLayout        oldLayout,        // 图像当前布局（图像创建时，按占用内存最大的无压缩布局分配内存，运行时通常采用压缩布局以节省显存带宽，图像布局的转换不会改变图像分配的实际内存大小，只会改变有效数据的大小）
 	                           vk::ImageLayout        newLayout,        // 图像将要转换的布局
@@ -866,6 +978,7 @@ class HelloTriangleApplication
 		endSingleTimeCommands(*commandBuffer);        // 结束录制并提交命令缓冲
 	}
 
+	// 辅助函数，从 Buffer 拷贝到 Image
 	void copyBufferToImage(const vk::raii::Buffer &buffer,        // 源数据缓冲
 	                       vk::raii::Image        &image,         // 目标图像对象
 	                       uint32_t                width,         // 图像宽度
@@ -898,6 +1011,7 @@ class HelloTriangleApplication
 		endSingleTimeCommands(*commandBuffer);
 	}
 
+	// 加载模型（.obj）
 	void loadModel()
 	{
 		tinyobj::attrib_t                attrib;           // 存储所有顶点的位置、法线、纹理坐标等属性数据（OBJ 文件保证"零件"层面的去重）
@@ -940,6 +1054,7 @@ class HelloTriangleApplication
 		}
 	}
 
+	// 创建顶点缓冲区
 	void createVertexBuffer()
 	{
 		vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
@@ -969,6 +1084,7 @@ class HelloTriangleApplication
 		copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
 	}
 
+	// 创建索引缓冲区
 	void createIndexBuffer()
 	{
 		// 计算索引数据所需的总字节数
@@ -994,6 +1110,7 @@ class HelloTriangleApplication
 		copyBuffer(stagingBuffer, indexBuffer, bufferSize);
 	}
 
+	// 创建 UBO 缓冲区
 	void createUniformBuffers()
 	{
 		// 清理旧数据（重建 SwapChain 时调用）
@@ -1021,6 +1138,7 @@ class HelloTriangleApplication
 		}
 	}
 
+	// 创建描述符池
 	void createDescriptorPool()
 	{
 		std::array poolSize{
@@ -1042,6 +1160,7 @@ class HelloTriangleApplication
 		descriptorPool = vk::raii::DescriptorPool(device, poolInfo);        // 创建描述符池（描述符池不存放实际资源，描述符集相当于容器，描述符相当于指针，都不是实际资源）
 	}
 
+	// 分配并写入描述符集
 	void createDescriptorSets()
 	{
 		std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *descriptorSetLayout);        // 将 descriptorSetLayout 重复 MAX_FRAMES_IN_FLIGHT 填入数组
@@ -1091,6 +1210,7 @@ class HelloTriangleApplication
 		}
 	}
 
+	// 辅助函数，分配 Buffer 显存
 	void createBuffer(
 	    vk::DeviceSize          size,               // 缓冲区大小
 	    vk::BufferUsageFlags    usage,              // 缓冲区用途（驱动要求）
@@ -1122,6 +1242,7 @@ class HelloTriangleApplication
 		buffer.bindMemory(bufferMemory, 0);
 	}
 
+	// 辅助函数，一次性命令缓冲（开始）
 	std::unique_ptr<vk::raii::CommandBuffer> beginSingleTimeCommands()
 	{
 		vk::CommandBufferAllocateInfo allocInfo{
@@ -1138,6 +1259,7 @@ class HelloTriangleApplication
 		return commandBuffer;
 	}
 
+	// 辅助函数，一次性命令缓冲（结束并提交等待)
 	void endSingleTimeCommands(vk::raii::CommandBuffer &commandBuffer)
 	{
 		commandBuffer.end();
@@ -1150,6 +1272,7 @@ class HelloTriangleApplication
 		queue.waitIdle();                         // 阻塞 CPU 线程，等待 GPU 执行完队列中的所有任务
 	}
 
+	// 辅助函数，Buffer 拷贝
 	void copyBuffer(
 	    vk::raii::Buffer &srcBuffer,        // 源缓冲区（缓冲区的拷贝不涉及压缩传输，图像的拷贝才涉及压缩传输）
 	    vk::raii::Buffer &dstBuffer,        // 目标缓冲区
@@ -1183,6 +1306,7 @@ class HelloTriangleApplication
 		queue.waitIdle();
 	}
 
+	// 辅助函数，查找内存类型
 	uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties)        // 根据过滤器和属性查找适合的内存类型索引
 	{
 		vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();        // 获取显卡所有内存堆和内存类型的信息
@@ -1210,48 +1334,23 @@ class HelloTriangleApplication
 		commandBuffers = vk::raii::CommandBuffers(device, allocInfo);        // CommandBuffers 函数返回的是命令缓冲数组
 	}
 
-	void createDepthResources()
-	{
-		vk::Format depthFormat = findDepthFormat();        // 确定使用格式
-		createImage(swapChainExtent.width, swapChainExtent.height, 1, depthFormat,
-		            vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eDepthStencilAttachment,
-		            vk::MemoryPropertyFlagBits::eDeviceLocal, depthImage, depthImageMemory);               // 创建图像对象并分配显存
-		depthImageView = createImageView(depthImage, depthFormat, vk::ImageAspectFlagBits::eDepth, 1);        // 创建图像视图
-	}
-
-	vk::Format findSupportedFormat(
-	    const std::vector<vk::Format> &candidates,        // 候选格式列表
-	    vk::ImageTiling                tiling,            // 请求的平铺模式
-	    vk::FormatFeatureFlagBits      features           // 请求格式必须支持的特性（位标志）
-	)
-	{
-		// 遍历所有候选格式
-		for (auto format : candidates)
-		{
-			vk::FormatProperties props = physicalDevice.getFormatProperties(format);
-			if (tiling == vk::ImageTiling::eLinear && (props.linearTilingFeatures & features) == features)        // 请求的是线性平铺，且该候选格式在线性平铺模式下支持所有请求的特性
-				return format;
-			if (tiling == vk::ImageTiling::eOptimal && (props.optimalTilingFeatures & features) == features)        // 请求的是最优平铺，且该候选格式在线性平铺模式下支持所有请求的特性
-				return format;
-		}
-		throw std::runtime_error("failed to find supported format");
-	}
-
-	vk::Format findDepthFormat()
-	{
-		return findSupportedFormat(
-		    {vk::Format::eD32Sfloat, vk::Format::eD32SfloatS8Uint, vk::Format::eD24UnormS8Uint},        // 候选格式列表
-		    vk::ImageTiling::eOptimal,                                                                  // 平铺模式
-		    vk::FormatFeatureFlagBits::eDepthStencilAttachment                                          // 特性要求
-		);
-	}
-
+	// 录制命令缓冲
 	void recordCommandBuffer(uint32_t imageIndex)
 	{
 		auto &commandBuffer = commandBuffers[frameIndex];
 		commandBuffer.begin({});        // 开始录制命令
 
-		transition_image_layout(        // 设置管线屏障，这里是对图像内存布局转化做同步
+		transition_image_layout(        // 转换 MSAA 颜色图像布局
+		    *colorImage,
+		    vk::ImageLayout::eUndefined,
+		    vk::ImageLayout::eColorAttachmentOptimal,
+		    {},
+		    vk::AccessFlagBits2::eColorAttachmentWrite,
+		    vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+		    vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+		    vk::ImageAspectFlagBits::eColor);
+
+		transition_image_layout(        // 转换 Swapchain 图像布局
 		    swapChainImages[imageIndex],
 		    vk::ImageLayout::eUndefined,                               // 不关心图像的原布局（因为不保留原内容）
 		    vk::ImageLayout::eColorAttachmentOptimal,                  // 将图像布局切换为颜色附件最优布局
@@ -1276,11 +1375,14 @@ class HelloTriangleApplication
 
 		// 颜色附件信息
 		vk::RenderingAttachmentInfo colorAttachmentInfo = {
-		    .imageView   = swapChainImageViews[imageIndex],
-		    .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-		    .loadOp      = vk::AttachmentLoadOp::eClear,
-		    .storeOp     = vk::AttachmentStoreOp::eStore,        // 渲染结果要从缓存写会显存（最后阶段的深度缓冲就可以选择不写入，优化性能）（多重抗锯齿的 MSAA 原图用完也不用写回显存）
-		    .clearValue  = clearColor};
+		    .imageView          = *colorImageView,
+		    .imageLayout        = vk::ImageLayout::eColorAttachmentOptimal,
+		    .resolveMode        = vk::ResolveModeFlagBits::eAverage,               // 启用解析，模式为取平均值
+		    .resolveImageView   = swapChainImageViews[imageIndex],                 // 解析的目标
+		    .resolveImageLayout = vk::ImageLayout::eColorAttachmentOptimal,        // 解析目标的布局
+		    .loadOp             = vk::AttachmentLoadOp::eClear,
+		    .storeOp            = vk::AttachmentStoreOp::eDontCare,        // MSAA 数据解析后就不需要保留了，设为 DontCare 提高性能
+		    .clearValue         = clearColor};
 
 		// 深度附件信息
 		vk::RenderingAttachmentInfo depthAttachmentInfo = {
@@ -1343,7 +1445,7 @@ class HelloTriangleApplication
 
 		commandBuffer.endRendering();        // 结束动态渲染
 
-		// 转换图像的布局
+		// 转换 Swapchain 图像布局，准备显示
 		transition_image_layout(
 		    swapChainImages[imageIndex],
 		    vk::ImageLayout::eColorAttachmentOptimal,
@@ -1397,6 +1499,7 @@ class HelloTriangleApplication
 		commandBuffers[frameIndex].pipelineBarrier2(dependency_info);        // 录制屏障指令
 	}
 
+	// 创建每帧的同步对象
 	void createSyncObjects()
 	{
 		assert(presentCompleteSemphores.empty() && renderFinishedSemphores.empty() && inFlightFences.empty());
@@ -1414,6 +1517,7 @@ class HelloTriangleApplication
 		}
 	}
 
+	// 更新 UBO
 	void updateUniformBuffer(uint32_t currentImage)
 	{
 		static auto startTime = std::chrono::high_resolution_clock::now();        // 静态变量记录开始时间
@@ -1430,6 +1534,7 @@ class HelloTriangleApplication
 		memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));        // 更新（GPU 可见）特殊 CPU 内存中的 UBO
 	}
 
+	// 绘制帧
 	void drawFrame()
 	{
 		auto fenceResult = device.waitForFences(*inFlightFences[frameIndex], vk::True, UINT64_MAX);        // 确保当前工作帧的上一帧的所有 GPU 工作已完成（不代表渲染结果已经被呈现）
@@ -1517,6 +1622,7 @@ class HelloTriangleApplication
 		return shaderModule;
 	}
 
+	// 辅助函数，选择最小图像数量
 	static uint32_t chooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const &surfaceCapabilities)
 	{
 		auto minImageCount = std::max(3u, surfaceCapabilities.minImageCount);        // 尝试请求至少 3 张图像
@@ -1528,6 +1634,7 @@ class HelloTriangleApplication
 		return minImageCount;
 	}
 
+	// 辅助函数，选择 Surface 格式
 	static vk::SurfaceFormatKHR chooseSwapSurfaceFormat(std::vector<vk::SurfaceFormatKHR> const &availableFormats)
 	{
 		assert(!availableFormats.empty());
@@ -1541,6 +1648,7 @@ class HelloTriangleApplication
 		return formatIt != availableFormats.end() ? *formatIt : availableFormats[0];
 	}
 
+	// 辅助函数，选择呈现模式
 	static vk::PresentModeKHR chooseSwapPresentMode(const std::vector<vk::PresentModeKHR> &availablePresentModes)
 	{
 		assert(std::ranges::any_of(availablePresentModes, [](auto presentMode) { return presentMode == vk::PresentModeKHR::eFifo; }));
@@ -1550,6 +1658,7 @@ class HelloTriangleApplication
 		           vk::PresentModeKHR::eFifo;            // 垂直同步
 	}
 
+	// 辅助函数，选择 Swap Extent
 	vk::Extent2D chooseSwapExtent(const vk::SurfaceCapabilitiesKHR &capabilities)
 	{
 		if (capabilities.currentExtent.width != 0xFFFFFFFF)        // 驱动是否写死了窗口大小
