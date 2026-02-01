@@ -105,21 +105,6 @@ struct UniformBufferObject
 	glm::mat4 proj;         // 投影矩阵
 };
 
-// const std::vector<Vertex> vertices = {
-//     {{-0.5f, -0.5f, 0.0f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-//     {{0.5f, -0.5f, 0.0f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-//     {{0.5f, 0.5f, 0.0f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-//     {{-0.5f, 0.5f, 0.0f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}},
-//
-//     {{-0.5f, -0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}, {1.0f, 0.0f}},
-//     {{0.5f, -0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}, {0.0f, 0.0f}},
-//     {{0.5f, 0.5f, -0.5f}, {0.0f, 0.0f, 1.0f}, {0.0f, 1.0f}},
-//     {{-0.5f, 0.5f, -0.5f}, {1.0f, 1.0f, 1.0f}, {1.0f, 1.0f}}};
-//
-// const std::vector<uint16_t> indices = {
-//     0, 1, 2, 2, 3, 0,
-//     4, 5, 6, 6, 7, 4};
-
 class HelloTriangleApplication
 {
   public:
@@ -155,6 +140,7 @@ class HelloTriangleApplication
 	vk::raii::DeviceMemory depthImageMemory = nullptr;
 	vk::raii::ImageView    depthImageView   = nullptr;
 
+	uint32_t               mipLevels          = 0;              // 存储根据纹理尺寸计算出的 Mipmap 层级总数
 	vk::raii::Image        textureImage       = nullptr;        // 纹理图像句柄
 	vk::raii::DeviceMemory textureImageMemory = nullptr;        // 分配给纹理图像的显存
 	vk::raii::ImageView    textureImageView   = nullptr;
@@ -610,6 +596,8 @@ class HelloTriangleApplication
 		int            texWidth, texHeight, texChannels;
 		stbi_uc       *pixels    = stbi_load(TEXTURE_PATH.c_str(), &texWidth, &texHeight, &texChannels, STBI_rgb_alpha);        // STBI_rgb_alpha 表示强制加载 alpha 通道，即使原图没有
 		vk::DeviceSize imageSize = texWidth * texHeight * 4;
+		mipLevels                = static_cast<uint32_t>(std::floor(std::log2(std::max(texWidth, texHeight)))) + 1;        // 根据图像尺寸计算 Mipmap 层级数（+1 是包含原图层级）
+
 		if (!pixels)
 		{
 			throw std::runtime_error("failed to load texture image!");
@@ -629,22 +617,119 @@ class HelloTriangleApplication
 		// 创建显存上的的纹理图像
 		createImage(texWidth,
 		            texHeight,
+		            mipLevels,
 		            vk::Format::eR8G8B8A8Srgb,
 		            vk::ImageTiling::eOptimal,
-		            vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
+		            vk::ImageUsageFlagBits::eTransferSrc | vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eSampled,
 		            vk::MemoryPropertyFlagBits::eDeviceLocal,
 		            textureImage,
 		            textureImageMemory);
 
 		// 图像布局转换与复制
-		transitionImageLayout(textureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);        // 将图像改为适合 GPU 拷贝引擎高效写入的格式
+		transitionImageLayout(textureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal, mipLevels);        // 将图像改为适合 GPU 拷贝引擎高效写入的格式
 		copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));
-		transitionImageLayout(textureImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);        // 将图像改为适合 Shader 高效读取的格式
+		// transitionImageLayout(textureImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);        // 将图像改为适合 Shader 高效读取的格式
+		generateMipmaps(textureImage, vk::Format::eR8G8B8A8Srgb, texWidth, texHeight, mipLevels);
+	}
+
+	void generateMipmaps(vk::raii::Image &image, vk::Format imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels)
+	{
+		// 向 GPU 查询，对于这种图像格式，在使用 GPU 优化排布时，是否支持线性过滤
+		vk::FormatProperties formatProperties = physicalDevice.getFormatProperties(imageFormat);
+		if (!(formatProperties.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImageFilterLinear))
+		{
+			throw std::runtime_error("texture image format does not support linear blitting!");
+		}
+
+		std::unique_ptr<vk::raii::CommandBuffer> commandBuffer = beginSingleTimeCommands();
+
+		vk::ImageMemoryBarrier barrier = {
+		    .srcAccessMask       = vk::AccessFlagBits::eTransferWrite,
+		    .dstAccessMask       = vk::AccessFlagBits::eTransferRead,
+		    .oldLayout           = vk::ImageLayout::eTransferDstOptimal,
+		    .newLayout           = vk::ImageLayout::eTransferSrcOptimal,
+		    .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
+		    .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
+		    .image               = image};
+		barrier.subresourceRange.aspectMask     = vk::ImageAspectFlagBits::eColor;        // 仅针对颜色分量
+		barrier.subresourceRange.baseArrayLayer = 0;
+		barrier.subresourceRange.layerCount     = 1;
+		barrier.subresourceRange.levelCount     = 1;        // 每次只处理一个 Mip Level
+
+		int32_t mipWidth  = texWidth;
+		int32_t mipHeight = texHeight;
+
+		// 循环生成每一级 Mipmap (i=1 到 mipLevels-1)
+		for (uint32_t i = 1; i < mipLevels; i++)
+		{
+			// 将上一级 mipmap 从传输目标转换为传输源，供 Blit 操作读取
+			barrier.subresourceRange.baseMipLevel = i - 1;
+			barrier.oldLayout                     = vk::ImageLayout::eTransferDstOptimal;
+			barrier.newLayout                     = vk::ImageLayout::eTransferSrcOptimal;
+			barrier.srcAccessMask                 = vk::AccessFlagBits::eTransferWrite;
+			barrier.dstAccessMask                 = vk::AccessFlagBits::eTransferRead;
+
+			// 提交管线屏障
+			commandBuffer->pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+			                               vk::PipelineStageFlagBits::eTransfer,
+			                               {},            // dependencyFlags (依赖标志位，默认全局依赖，即区域级同步，不是像素级同步）
+			                               {},            // memoryBarriers (全局内存屏障，屏障执行前，所有内存写入必须完成，且对屏障执行后的所有读取可见)
+			                               {},            // bufferMemoryBarriers (缓冲区内存屏障)
+			                               barrier        // 图像内存屏障
+			);
+
+			// 计算源区域和目标区域的坐标偏移量
+			vk::ArrayWrapper1D<vk::Offset3D, 2> offsets, dstOffsets;
+			offsets[0]    = vk::Offset3D(0, 0, 0);
+			offsets[1]    = vk::Offset3D(mipWidth, mipHeight, 1);
+			dstOffsets[0] = vk::Offset3D(0, 0, 0);
+			dstOffsets[1] = vk::Offset3D(mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1);
+
+			// 设置 Blit 参数
+			vk::ImageBlit blit  = {.srcSubresource = {}, .srcOffsets = offsets, .dstSubresource = {}, .dstOffsets = dstOffsets};
+			blit.srcSubresource = vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, i - 1, 0, 1);        // 源 Mipmap 层级（i-1），起始数组层索引，数组层数量
+			blit.dstSubresource = vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, i, 0, 1);            // 目标 Mipmap 层级（i）
+
+			// 执行位块传输
+			commandBuffer->blitImage(image,        // 此处 image 既是源，也是目标
+			                         vk::ImageLayout::eTransferSrcOptimal,
+			                         image,
+			                         vk::ImageLayout::eTransferDstOptimal,
+			                         {blit},
+			                         vk::Filter::eLinear        // 当源图和目标图尺寸不同时，用线性插值计算新像素的颜色
+			);
+
+			// 对完成传输操作的上一级源图像，做图像布局转换，供 Shader 采样
+			barrier.oldLayout     = vk::ImageLayout::eTransferSrcOptimal;
+			barrier.newLayout     = vk::ImageLayout::eShaderReadOnlyOptimal;
+			barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
+			barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
+
+			commandBuffer->pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+			                               vk::PipelineStageFlagBits::eFragmentShader,
+			                               {}, {}, {}, barrier);
+			// 更新下一轮循环的尺寸
+			if (mipWidth > 1)
+				mipWidth /= 2;
+			if (mipHeight > 1)
+				mipHeight /= 2;
+		}
+		// 对最后一层 Mipmap 图像，做图像布局转换，供 Shader 采样
+		barrier.subresourceRange.baseMipLevel = mipLevels - 1;
+		barrier.oldLayout                     = vk::ImageLayout::eTransferDstOptimal;
+		barrier.newLayout                     = vk::ImageLayout::eShaderReadOnlyOptimal;
+		barrier.srcAccessMask                 = vk::AccessFlagBits::eTransferWrite;
+		barrier.dstAccessMask                 = vk::AccessFlagBits::eShaderRead;
+
+		commandBuffer->pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+		                               vk::PipelineStageFlagBits::eFragmentShader,
+		                               {}, {}, {}, barrier);
+		endSingleTimeCommands(*commandBuffer);
 	}
 
 	void createTextureImageView()
 	{
-		textureImageView = createImageView(textureImage, vk::Format::eR8G8B8A8Srgb, vk::ImageAspectFlagBits::eColor);        // 创建纹理图像的视图（着色器必须通过 ImageView 来访问 Image
+		textureImageView = createImageView(textureImage, vk::Format::eR8G8B8A8Srgb, vk::ImageAspectFlagBits::eColor, mipLevels);        // 创建纹理图像的视图（着色器必须通过 ImageView 来访问 Image
 	}
 
 	void createTextureSampler()
@@ -662,12 +747,15 @@ class HelloTriangleApplication
 		    .anisotropyEnable = vk::True,                                      // 启用各项异性过滤（解决倾斜观察时的模糊问题）（纹理根据长轴来决定 mipmap 层级，短轴使用的 mipmap 级别过高导致模糊）(如果用短轴来决定 mipmap 会有更严重的闪烁）
 		    .maxAnisotropy    = properties.limits.maxSamplerAnisotropy,        // 使用设备支持的最大各项异性级别
 		    .compareEnable    = vk::False,                                     // 禁用比较操作（说明这不是阴影贴图)
-		    .compareOp        = vk::CompareOp::eAlways};
+		    .compareOp        = vk::CompareOp::eAlways,
+		    .minLod           = 0.0f,                   // 允许使用的最清晰的 Mipmap 层级（0）
+		    .maxLod           = vk::LodClampNone        // 允许使用的最模糊的 Mipmap 层级（无限制）
+		};
 
 		textureSampler = vk::raii::Sampler(device, samplerInfo);
 	}
 
-	vk::raii::ImageView createImageView(vk::raii::Image &image, vk::Format format, vk::ImageAspectFlagBits aspectFlags)
+	vk::raii::ImageView createImageView(vk::raii::Image &image, vk::Format format, vk::ImageAspectFlagBits aspectFlags, uint32_t mipLevels) const
 	{
 		vk::ImageViewCreateInfo viewInfo{
 		    .image            = image,                         // 要为哪个 Image 对象创建视图
@@ -676,9 +764,9 @@ class HelloTriangleApplication
 		    .subresourceRange = {
 		        // 视图可以看到图像的哪些部分
 		        aspectFlags,        // 可以访问的分量
-		        0,                  // mipmap 层级，从 0 开始，共 1 层
-		        1,
-		        0,        // 数组层级， 从 0 开始，共 1 层
+		        0,                  // mipmap 层级，从 0 开始
+		        mipLevels,          //
+		        0,                  // 数组层级， 从 0 开始，共 1 层
 		        1,
 		    }};
 		return vk::raii::ImageView(device, viewInfo);
@@ -686,6 +774,7 @@ class HelloTriangleApplication
 
 	void createImage(uint32_t                width,              // 图像宽度
 	                 uint32_t                height,             // 图像高度
+	                 uint32_t                mipLevels,          // Mipmap 层级数
 	                 vk::Format              format,             // 图像格式
 	                 vk::ImageTiling         tiling,             // 图像数据的内存排列模式（ImageTiling 在图像创建后不可更改，ImageLayout 在图像创建后可更改）
 	                 vk::ImageUsageFlags     usage,              // 图像的用途标志位
@@ -697,7 +786,7 @@ class HelloTriangleApplication
 		    .imageType   = vk::ImageType::e2D,                 // 图像类型，1D/2D/3D
 		    .format      = format,                             // 像素格式，指定颜色通道的排列和大小
 		    .extent      = {width, height, 1},                 // 图像范围（宽，高，深），2D 图像的深度是 1
-		    .mipLevels   = 1,                                  // MIP 贴图级别数量，这里 1 表示没有生成 MIP 链
+		    .mipLevels   = mipLevels,                          // MIP 贴图级别数量
 		    .arrayLayers = 1,                                  // 纹理数组层数，这里 1 表示不是纹理数组
 		    .samples     = vk::SampleCountFlagBits::e1,        // 多重采样计数，e1 表示每像素 1 个样本（不启用 MSAA）
 		    .tiling      = tiling,                             // 内存平铺模式，（eLinear：线性排列，CPU 可直接读取，但在 GPU 上性能差）（eOptimal：硬件特定的优化排列，GPU 性能最佳，但 CPU 无法直接读取）
@@ -716,10 +805,11 @@ class HelloTriangleApplication
 		image.bindMemory(imageMemory, 0);        // 绑定实际显存，偏移量为 0
 	}
 
+	// 在预处理阶段的屏障
 	void transitionImageLayout(const vk::raii::Image &image,            // 需要转换布局的图像
 	                           vk::ImageLayout        oldLayout,        // 图像当前布局（图像创建时，按占用内存最大的无压缩布局分配内存，运行时通常采用压缩布局以节省显存带宽，图像布局的转换不会改变图像分配的实际内存大小，只会改变有效数据的大小）
-	                           vk::ImageLayout        newLayout         // 图像将要转换的布局
-	)
+	                           vk::ImageLayout        newLayout,        // 图像将要转换的布局
+	                           uint32_t               mipLevels)
 	{
 		auto commandBuffer = beginSingleTimeCommands();        // 分配一个一次性的命令缓冲
 
@@ -733,7 +823,7 @@ class HelloTriangleApplication
                 // 指定屏障影响图像的哪些部分
 		           .aspectMask     = vk::ImageAspectFlagBits::eColor,        // 仅影响颜色分量
 		           .baseMipLevel   = 0,                                      // 从第 0 层 Mipmap 开始
-		           .levelCount     = 1,                                      // 仅影响 1 层 Mipmap
+		           .levelCount     = mipLevels,                              //
 		           .baseArrayLayer = 0,                                      // 从第 0 层数组层开始
 		           .layerCount     = 1                                       // 仅影响 1 层数组层
             }};
@@ -1123,10 +1213,10 @@ class HelloTriangleApplication
 	void createDepthResources()
 	{
 		vk::Format depthFormat = findDepthFormat();        // 确定使用格式
-		createImage(swapChainExtent.width, swapChainExtent.height, depthFormat,
+		createImage(swapChainExtent.width, swapChainExtent.height, 1, depthFormat,
 		            vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eDepthStencilAttachment,
 		            vk::MemoryPropertyFlagBits::eDeviceLocal, depthImage, depthImageMemory);               // 创建图像对象并分配显存
-		depthImageView = createImageView(depthImage, depthFormat, vk::ImageAspectFlagBits::eDepth);        // 创建图像视图
+		depthImageView = createImageView(depthImage, depthFormat, vk::ImageAspectFlagBits::eDepth, 1);        // 创建图像视图
 	}
 
 	vk::Format findSupportedFormat(
@@ -1177,8 +1267,8 @@ class HelloTriangleApplication
 		    vk::ImageLayout::eDepthAttachmentOptimal,
 		    vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
 		    vk::AccessFlagBits2::eDepthStencilAttachmentWrite,
-		    vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
-		    vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,
+		    vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,        // 影响在屏障指令之前提交的 drawcall
+		    vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,        // 影响在屏障指令之后提交的 drawcall
 		    vk::ImageAspectFlagBits::eDepth);
 
 		vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);        // 定义清除颜色
@@ -1267,6 +1357,7 @@ class HelloTriangleApplication
 		commandBuffer.end();        // 结束录制
 	}
 
+	// 在主循环阶段的屏障
 	void transition_image_layout(
 	    vk::Image               image,                  // Swapchain 中的哪一张图
 	    vk::ImageLayout         old_layout,             // 初始布局
