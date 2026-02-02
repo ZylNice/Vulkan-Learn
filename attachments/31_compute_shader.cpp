@@ -564,6 +564,7 @@ class ComputeShaderApplication
 		commandPool = vk::raii::CommandPool(device, poolInfo);
 	}
 
+	// 初始化粒子的 SSBO
 	void createShaderStorageBuffers()
 	{
 		// 初始化粒子
@@ -676,7 +677,7 @@ class ComputeShaderApplication
 	{
 		std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, computeDescriptorSetLayout);        // 为什么这里不加 *，而图形管线哪里加 * ？
 		vk::DescriptorSetAllocateInfo        allocInfo{
-		           .descriptorPool     = descriptorPool,              // 指定从哪个描述符池中分配内存
+		           .descriptorPool     = *descriptorPool,             // 指定从哪个描述符池中分配内存
 		           .descriptorSetCount = MAX_FRAMES_IN_FLIGHT,        // 要分配多少个描述符集
 		           .pSetLayouts        = layouts.data()               // 指定每个集合使用什么布局
         };
@@ -763,7 +764,7 @@ class ComputeShaderApplication
 	std::unique_ptr<vk::raii::CommandBuffer> beginSingleTimeCommands()
 	{
 		vk::CommandBufferAllocateInfo allocInfo{
-		    .commandPool        = commandPool,                             // 从哪个命令池分配命令缓冲区
+		    .commandPool        = *commandPool,                            // 从哪个命令池分配命令缓冲区
 		    .level              = vk::CommandBufferLevel::ePrimary,        // 主命令缓冲，可以直接提交给队列执行
 		    .commandBufferCount = 1                                        // 仅创建一个命令缓冲
 		};
@@ -882,7 +883,7 @@ class ComputeShaderApplication
 		    .imageView   = swapChainImageViews[imageIndex],
 		    .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
 		    .loadOp      = vk::AttachmentLoadOp::eClear,
-		    .storeOp     = vk::AttachmentStoreOp::eDontCare,        // MSAA 数据解析后就不需要保留了，设为 DontCare 提高性能
+		    .storeOp     = vk::AttachmentStoreOp::eStore,
 		    .clearValue  = clearColor};
 
 		// 渲染信息
@@ -917,7 +918,7 @@ class ComputeShaderApplication
 		                                {0}                                        // 从 buffer 的第 0 个字节开始读
 		);
 
-		commandBuffer.endRendering();
+		commandBuffer.draw(PARTICLE_COUNT, 1, 0, 0);
 
 		commandBuffer.endRendering();        // 结束动态渲染
 
@@ -979,7 +980,10 @@ class ComputeShaderApplication
 		commandBuffer.end();
 	}
 
-	// 创建每帧的同步对象（栅栏是 CPU 与 GPU 的同步，信号量是跨队列同步，管线屏障是同队列的不同命令的同步）
+	// 创建每帧的同步对象
+	// 栅栏是 CPU 与 GPU 的同步，
+	// 信号量是对一次提交的修饰，用于同步不同提交（可跨队列同步，也可同队列同步）
+	// 管线屏障是同队列的不同命令的同步
 	void createSyncObjects()
 	{
 		inFlightFences.clear();
@@ -1006,7 +1010,8 @@ class ComputeShaderApplication
 	// 绘制帧
 	void drawFrame()
 	{
-		auto fenceResult = device.waitForFences(*inFlightFences[frameIndex], vk::True, UINT64_MAX);        // 确保当前工作帧的上一帧的所有 GPU 工作已完成（不代表渲染结果已经被呈现）
+		auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, nullptr, *inFlightFences[frameIndex]);        // 这里没有考量图像是否可用，理论上有风险
+		auto fenceResult          = device.waitForFences(*inFlightFences[frameIndex], vk::True, UINT64_MAX);             // CPU 等待图像可用
 		if (fenceResult != vk::Result::eSuccess)
 		{
 			throw std::runtime_error("failed to wait for fence!");
@@ -1019,20 +1024,6 @@ class ComputeShaderApplication
 		uint64_t graphicsWaitValue   = computeSignalValue;        // Graphics 等待 Compute 完成
 		uint64_t graphicsSignalValue = ++timelineValue;           // Graphics 完成后 Signal 的值
 
-		// auto [result, imageIndex] = swapChain.acquireNextImage(        // 向交换链请求一张空闲的画布（非空闲的画布可能被 GPU 或显示器占用，有可能正在绘制或显示）
-		//     UINT64_MAX,                                                // 等待时间（此处表示等待时间无限长）（三缓冲+邮箱：本质是非阻塞调用，传统垂直同步：画满了后会阻塞）
-		//     *presentCompleteSemphores[frameIndex],                     // 异步操作，返回后，当图片真正可用时触发信号量（返回时逻辑上交割完毕，还需等待硬件上的交割完毕）
-		//     nullptr                                                    // 可填写栅栏，让 CPU 也感知到图片准备好了
-		//);
-		// if (result == vk::Result::eErrorOutOfDateKHR)
-		//{
-		//	recreateSwapChain();
-		//	return;
-		// }
-		// if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR)
-		//{
-		//	throw std::runtime_error("failed to acquire swap chain image!");
-		// }
 		updateUniformBuffer(frameIndex);        // 更新 UBO 缓冲区
 
 		// 提交计算队列任务
@@ -1045,9 +1036,9 @@ class ComputeShaderApplication
 			    .signalSemaphoreValueCount = 1,
 			    .pSignalSemaphoreValues    = &computeSignalValue};
 
-			vk::PipelineStageFlags waitStages[] = {vk::PipelineStageFlagBits::eComputeShader};
+			vk::PipelineStageFlags waitStages[] = {vk::PipelineStageFlagBits::eComputeShader};        // 需要等待的阶段
 
-			const vk::SubmitInfo submitInfo{
+			const vk::SubmitInfo computeSubmitInfo{
 			    .pNext                = &computeTimelineInfo,
 			    .waitSemaphoreCount   = 1,
 			    .pWaitSemaphores      = &*semaphore,
@@ -1057,7 +1048,7 @@ class ComputeShaderApplication
 			    .signalSemaphoreCount = 1,
 			    .pSignalSemaphores    = &*semaphore};
 
-			queue.submit(submitInfo, *inFlightFences[frameIndex]);        // 提交命令，GPU 执行完毕后触发信号量（CPU）
+			queue.submit(computeSubmitInfo, nullptr);        // 提交命令，这些命令完成后不触发 fence
 		}
 
 		// 提交图形队列任务
@@ -1073,7 +1064,7 @@ class ComputeShaderApplication
 			    .signalSemaphoreValueCount = 1,
 			    .pSignalSemaphoreValues    = &graphicsSignalValue};
 
-			const vk::SubmitInfo submitInfo{
+			const vk::SubmitInfo graphicsSubmitInfo{
 			    .pNext                = &graphicsTimelineInfo,
 			    .waitSemaphoreCount   = 1,
 			    .pWaitSemaphores      = &*semaphore,
@@ -1083,58 +1074,52 @@ class ComputeShaderApplication
 			    .signalSemaphoreCount = 1,
 			    .pSignalSemaphores    = &*semaphore};
 
-			queue.submit(submitInfo, *inFlightFences[frameIndex]);        // 提交命令，GPU 执行完毕后触发信号量（CPU）
+			queue.submit(graphicsSubmitInfo, nullptr);        // 提交命令，这些命令完成后不触发 fence
 
 			vk::SemaphoreWaitInfo waitInfo{
 			    .semaphoreCount = 1,
 			    .pSemaphores    = &*semaphore,
 			    .pValues        = &graphicsSignalValue};
 
-			auto result = device.waitSemaphores(waitInfo, UINT64_MAX);
+			auto result = device.waitSemaphores(waitInfo, UINT64_MAX);        // 让 CPU 阻塞，直到 Graphics 任务完成，让信号量更新到 graphicsSignalValue
 			if (result != vk::Result::eSuccess)
 			{
 				throw std::runtime_error("failed to wait for semaphore!");
 			}
 
-			const vk::PresentInfoKHR presentInfoKHR{
-			    .waitSemaphoreCount = 1,
-			    .pWaitSemaphores    = nullptr,
-			    .swapchainCount     = 1,
-			    .pSwapchains        = &*swapChain,
-			    .pImageIndices      = &imageIndex};        // 要展示的图片
-			result = queue.presentKHR(presentInfoKHR);
-			if ((result == vk::Result::eSuboptimalKHR) || (result == vk::Result::eErrorOutOfDateKHR) || framebufferResized)        // eSuboptimalKHR 表示交换链能用，但和当前窗口不完全匹配（如分辨率不同，但可拉伸），
-			                                                                                                                       // framebufferResized，在某些驱动上，改变窗口大小时可能仍返回 eSuccess，因为驱动通过自动缩放交换链图像以适应窗口尺寸
+			try
 			{
-				framebufferResized = false;
-				recreateSwapChain();
+				const vk::PresentInfoKHR presentInfoKHR{
+				    .waitSemaphoreCount = 0,
+				    .pWaitSemaphores    = nullptr,
+				    .swapchainCount     = 1,
+				    .pSwapchains        = &*swapChain,
+				    .pImageIndices      = &imageIndex};        // 要展示的图片
+				result = queue.presentKHR(presentInfoKHR);
+				if ((result == vk::Result::eSuboptimalKHR) || (result == vk::Result::eErrorOutOfDateKHR) || framebufferResized)        // eSuboptimalKHR 表示交换链能用，但和当前窗口不完全匹配（如分辨率不同，但可拉伸），
+				                                                                                                                       // framebufferResized，在某些驱动上，改变窗口大小时可能仍返回 eSuccess，因为驱动通过自动缩放交换链图像以适应窗口尺寸
+				{
+					framebufferResized = false;
+					recreateSwapChain();
+				}
+				else if (result != vk::Result::eSuccess)
+				{
+					throw std::runtime_error("failed to present swap chain image!");
+				}
 			}
-			else if (result != vk::Result::eSuccess)
+			catch (const vk::SystemError &e)
 			{
-				throw std::runtime_error("failed to present swap chain image!");
+				if (e.code().value() == static_cast<int>(vk::Result::eErrorOutOfDateKHR))        // 交换链彻底失效，需要重建
+				{
+					recreateSwapChain();
+					return;
+				}
+				else
+				{
+					throw;
+				}
 			}
 		}
-
-		// commandBuffers[frameIndex].reset();
-		// recordCommandBuffer(imageIndex);        // 转为写入布局-绑定渲染目标--绘制图形-转为呈现布局
-
-		// vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
-
-		//try
-		//{
-		//}
-		//catch (const vk::SystemError &e)
-		//{
-		//	if (e.code().value() == static_cast<int>(vk::Result::eErrorOutOfDateKHR))        // 交换链彻底失效，需要重建
-		//	{
-		//		recreateSwapChain();
-		//		return;
-		//	}
-		//	else
-		//	{
-		//		throw;
-		//	}
-		//}
 		frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
 	}
 
@@ -1244,7 +1229,7 @@ int main()
 {
 	try
 	{
-		HelloTriangleApplication app;
+		ComputeShaderApplication app;
 		app.run();
 	}
 	catch (const std::exception &e)

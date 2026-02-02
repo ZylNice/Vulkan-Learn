@@ -168,8 +168,8 @@ class HelloTriangleApplication
 	vk::raii::CommandPool                commandPool = nullptr;        // 命令池，用于分配命令缓冲
 	std::vector<vk::raii::CommandBuffer> commandBuffers;               // 命令缓冲，用于记录绘图指令
 
-	std::vector<vk::raii::Semaphore> presentCompleteSemphores;        // 图像获取完成信号（GPU内）
-	std::vector<vk::raii::Semaphore> renderFinishedSemphores;         // 渲染完成信号（GPU内）
+	std::vector<vk::raii::Semaphore> presentCompleteSemphores;        // 交换链图像获取完成信号（GPU内，帧）
+	std::vector<vk::raii::Semaphore> renderFinishedSemphores;         // 渲染完成信号（GPU内，图像）
 	std::vector<vk::raii::Fence>     inFlightFences;                  // CPU 等待 GPU 完成的栅栏
 	uint32_t                         frameIndex = 0;                  // 当前帧索引（0 或 1）
 
@@ -1570,12 +1570,12 @@ class HelloTriangleApplication
 
 		const vk::SubmitInfo submitInfo{
 		    .waitSemaphoreCount   = 1,
-		    .pWaitSemaphores      = &*presentCompleteSemphores[frameIndex],        // GPU 在等待哪个信号量被触发（此处为 presentCompleteSemphore）
-		    .pWaitDstStageMask    = &waitDestinationStageMask,                     // GPU 在哪个流水线阶段等待（此处 GPU 可以执行顶点着色器、片元输出颜色计算，但颜色输出阶段必须停下来等待信号量被触发）
+		    .pWaitSemaphores      = &*presentCompleteSemphores[frameIndex],        // GPU 等待当前帧图像可用信号量被触发
+		    .pWaitDstStageMask    = &waitDestinationStageMask,                     // GPU 在颜色输出阶段等待信号量（此处 GPU 可以执行顶点着色器、片元输出颜色计算，但颜色输出阶段必须停下来等待信号量被触发）
 		    .commandBufferCount   = 1,
 		    .pCommandBuffers      = &*commandBuffers[frameIndex],        // GPU 执行哪个命令缓冲区的命令
 		    .signalSemaphoreCount = 1,
-		    .pSignalSemaphores    = &*renderFinishedSemphores[imageIndex]};        // GPU 执行完命令后，触发哪个信号量（GPU）
+		    .pSignalSemaphores    = &*renderFinishedSemphores[imageIndex]};        // GPU 执行完命令后，触发图像渲染完成信号量（GPU）
 
 		queue.submit(submitInfo, *inFlightFences[frameIndex]);        // 提交命令，GPU 执行完毕后触发信号量（CPU）
 
@@ -1583,7 +1583,7 @@ class HelloTriangleApplication
 		{
 			const vk::PresentInfoKHR presentInfoKHR{
 			    .waitSemaphoreCount = 1,
-			    .pWaitSemaphores    = &*renderFinishedSemphores[imageIndex],        // 等待该信号量被触发（渲染完成）
+			    .pWaitSemaphores    = &*renderFinishedSemphores[imageIndex],        // 等待图像渲染完成信号量被触发
 			    .swapchainCount     = 1,
 			    .pSwapchains        = &*swapChain,
 			    .pImageIndices      = &imageIndex};        // 要展示的图片
