@@ -1,13 +1,18 @@
 // #pragma warning(disable : 26813)  // 屏蔽 C26813 警告: "使用‘按位与’来检查标志是否设置"
 
 #include <algorithm>
-#include <chrono>        // 用于获取高精度时间，实现平滑旋转
+#include <atomic>                    // 原子操作
+#include <chrono>                    // 用于获取高精度时间，实现平滑旋转
+#include <condition_variable>        // 条件变量
 #include <cstdlib>
 #include <fstream>
+#include <future>        // 用于获取异步任务的计算结果
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <random>        // 用于生成粒子的随机初始位置和颜色
 #include <stdexcept>
+#include <thread>
 
 #if defined(__INTELLISENSE__) || !defined(USE_CPP20_MODULES)
 #	include <vulkan/vulkan_raii.hpp>
@@ -60,6 +65,99 @@ struct Particle
 		};
 	}
 };
+
+template <typename... Args>
+void log(Args &&...args)
+{
+#ifdef _DEBUG
+	(std::cout << ... << std::forward<Args>(args)) << std::endl;
+#endif
+}
+
+class ThreadSafeResourceManager
+{
+  private:
+	std::mutex                           resourceMutex;         // 用于保护资源创建过程的锁
+	std::vector<vk::raii::CommandPool>   commandPools;          // 每个线程一个池
+	std::vector<vk::raii::CommandBuffer> commandBuffers;        // 每个线程的 Buffer
+
+  public:
+	// 为指定数量的线程创建命令池
+	void createThrreadCommandPools(vk::raii::Device &device, uint32_t queueFamilyIndex, uint32_t threadCount)
+	{
+		std::lock_guard<std::mutex> lock(resourceMutex);
+
+		commandBuffers.clear();
+		commandPools.clear();
+
+		for (uint32_t i = 0; i < threadCount; i++)
+		{
+			vk::CommandPoolCreateInfo poolInfo{
+
+			    .flags            = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,        // 允许单独重置 Buffer
+			    .queueFamilyIndex = queueFamilyIndex};
+			try
+			{
+				commandPools.emplace_back(device, poolInfo);
+			}
+			catch (const std::exception &)
+			{
+				throw;
+			}
+		}
+	}
+
+	// 获取特定线程的命令池（线程安全）
+	vk::raii::CommandPool &getCommandPool(uint32_t threadIndex)
+	{
+		std::lock_guard lock(resourceMutex);
+		return commandPools[threadIndex];
+	}
+
+	// 为每个线程分配命令缓冲
+	void allocateCommandBuffers(vk::raii::Device &device, uint32_t threadCount, uint32_t bufferPerThread)
+	{
+		std::lock_guard lock(resourceMutex);
+
+		commandBuffers.clear();
+
+		if (commandPools.size() < threadCount)
+		{
+			throw std::runtime_error("Not enough command pools for thread count");
+		}
+
+		for (uint32_t i = 0; i < threadCount; i++)
+		{
+			vk::CommandBufferAllocateInfo allocaInfo{
+			    .commandPool        = *commandPools[i],
+			    .level              = vk::CommandBufferLevel::ePrimary,
+			    .commandBufferCount = bufferPerThread};
+			try
+			{
+				auto threadBuffers = device.allocateCommandBuffers(allocaInfo);
+				for (auto &buffer : threadBuffers)
+				{
+					commandBuffers.emplace_back(std::move(buffer));
+				}
+			}
+			catch (const std::exception &)
+			{
+				throw;
+			}
+		}
+	}
+
+	// 获取特定线程的命令缓冲
+	vk::raii::CommandBuffer &getCommandBuffer(uint32_t index)
+	{
+		if (index >= commandBuffers.size())
+		{
+			throw std::runtime_error("Command buffer index out of range");
+		}
+		return commandBuffers[index];
+	}
+}
+;
 
 class ComputeShaderApplication
 {
