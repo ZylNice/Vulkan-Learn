@@ -78,7 +78,7 @@ class ThreadSafeResourceManager
 {
   private:
 	std::mutex                           resourceMutex;         // 用于保护资源创建过程的锁
-	std::vector<vk::raii::CommandPool>   commandPools;          // 每个线程一个池
+	std::vector<vk::raii::CommandPool>   commandPools;          // 每个线程一个命令池（命令池不是线程安全的）
 	std::vector<vk::raii::CommandBuffer> commandBuffers;        // 每个线程的 Buffer
 
   public:
@@ -147,7 +147,7 @@ class ThreadSafeResourceManager
 		}
 	}
 
-	// 获取特定线程的命令缓冲
+	// 获取特定线程的命令缓冲（无需互斥锁，因为每个线程只访问属于自己的命令缓冲）
 	vk::raii::CommandBuffer &getCommandBuffer(uint32_t index)
 	{
 		if (index >= commandBuffers.size())
@@ -156,10 +156,9 @@ class ThreadSafeResourceManager
 		}
 		return commandBuffers[index];
 	}
-}
-;
+};
 
-class ComputeShaderApplication
+class MultithreadedApplication
 {
   public:
 	void run()
@@ -218,6 +217,26 @@ class ComputeShaderApplication
 
 	double lastTime = 0.0f;
 
+	uint32_t                       threadCount = 0;          // 工作线程总数
+	std::vector<std::thread>       workerThreads;            // 工作线程
+	std::atomic<bool>              shouldExit{false};        // 原子标志，通知所有线程退出
+	std::vector<std::atomic<bool>> threadWorkReady;          // 主线程置 true，通知所有工作线程开始工作
+	std::vector<std::atomic<bool>> threadWorkDone;           // 工作线程 true，通知主线程工作完成
+
+	std::mutex              queueSubmitMutex;         // 保护队列提交操作
+	std::mutex              workCompleteMutex;        // 配合条件变量使用
+	std::condition_variable workCompleteCv;           // 条件变量，用于唤醒沉睡的线程
+
+	ThreadSafeResourceManager resourceManager;        // 资源管理器
+
+	// 粒子分组，定义每个线程处理的数据范围
+	struct ParticleGroup
+	{
+		uint32_t startIndex;
+		uint32_t count;
+	};
+	std::vector<ParticleGroup> particleGroups;
+
 	std::vector<const char *> requiredDeviceExtension = {
 	    vk::KHRSwapchainExtensionName,        // 需要的物理设备拓展
 	};
@@ -238,7 +257,7 @@ class ComputeShaderApplication
 
 	static void framebufferResizeCallback(GLFWwindow *window, int width, int height)
 	{
-		auto app                = reinterpret_cast<ComputeShaderApplication *>(glfwGetWindowUserPointer(window));        // 从 window 中取出当前类对象指针
+		auto app                = reinterpret_cast<MultithreadedApplication *>(glfwGetWindowUserPointer(window));        // 从 window 中取出当前类对象指针
 		app->framebufferResized = true;
 	}
 
@@ -264,6 +283,47 @@ class ComputeShaderApplication
 		createComputeCommandBuffers();        // 分配计算命令缓冲
 		createSyncObjects();
 	}
+
+	void initThreads()
+	{
+		threadCount = 8u;
+		log("Initialzing ", threadCount, " threads for sequential execution");
+
+		threadWorkReady = std::vector<std::atomic<bool>>(threadCount);
+		threadWorkDone  = std::vector<std::atomic<bool>>(threadCount);
+
+		for (uint32_t i = 0; i < threadCount; i++)
+		{
+			threadWorkReady[i] = false;
+			threadWorkDone[i]  = true;
+		}
+
+		initThreadResource();
+
+		// 计算每个线程负责的粒子范围
+		const uint32_t particlesPerThread = PARTICLE_COUNT / threadCount;
+		particleGroups.resize(threadCount);
+		for (uint32_t i = 0; i < threadCount; i++)
+		{
+			particleGroups[i].startIndex = i * particlesPerThread;
+			particleGroups[i].count      = (i == threadCount - 1) ? (PARTICLE_COUNT - i * particlesPerThread) : particlesPerThread;        // 处理最后一个线程，防止除法余数导致粒子遗漏
+
+			log("Thread ", i, " will process particles ",
+			    particleGroups[i].startIndex, " to ",
+			    (particleGroups[i].startIndex + particleGroups[i].count - 1),
+			    " (count: ", particleGroups[i].count, ")");
+		}
+
+		// 启动实际的 C++ 线程
+		for (uint32_t i = 0; i < threadCount; i++)
+		{
+			workerThreads.emplace_back(&MultithreadedApplication::workerThreads, this, i);
+			log("Started worker thread ", i);
+		}
+	}
+
+	void workerThreadFunc(uint32_t threadIndex)
+	{}
 
 	// 主循环
 	void mainLoop()
@@ -1327,7 +1387,7 @@ int main()
 {
 	try
 	{
-		ComputeShaderApplication app;
+		MultithreadedApplication app;
 		app.run();
 	}
 	catch (const std::exception &e)
