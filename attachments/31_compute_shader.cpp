@@ -298,7 +298,7 @@ class MultithreadedApplication
 			threadWorkDone[i]  = true;
 		}
 
-		initThreadResource();
+		initThreadResources();
 
 		// 计算每个线程负责的粒子范围
 		const uint32_t particlesPerThread = PARTICLE_COUNT / threadCount;
@@ -322,8 +322,60 @@ class MultithreadedApplication
 		}
 	}
 
+	// 工作线程函数
 	void workerThreadFunc(uint32_t threadIndex)
-	{}
+	{
+		while (!shouldExit)
+		{
+			// 等待阶段
+			{
+				std::unique_lock<std::mutex> lock(workCompleteMutex);
+
+				workCompleteCv.wait(lock, [this, threadIndex]() {
+					return shouldExit || threadWorkReady[threadIndex].load(std::memory_order_acquire);
+				});
+
+				if (shouldExit)        // 如果是因为系统要关闭而唤醒，则跳出主循环
+				{
+					break;
+				}
+
+				if (!threadWorkReady[threadIndex].load(std::memory_order_acquire))        // 防止虚假唤醒（目前看，应该是多余的）
+				{
+					continue;
+				}
+			}
+
+			// 执行阶段
+			const ParticleGroup &group         = particleGroups[threadIndex];
+			bool                 workCompleted = false;
+
+			try
+			{
+				vk::raii::CommandBuffer *cmdBuffer = &resourceManager.getCommandBuffer(threadIndex);        // 获取该线程专属的 CommandBuffer
+				recordComputeCommandBuffer(*cmdBuffer, group.startIndex, group.count);                      // 调用录制函数，传入当前线程负责的粒子范围
+				workCompleted = true;
+			}
+			catch (const std::exception &)
+			{
+				workCompleted = false;
+			}
+
+			// 完成阶段
+			threadWorkDone[threadIndex].store(true, std::memory_order_release);          // 标记工作完成
+			threadWorkReady[threadIndex].store(false, std::memory_order_release);        // 重置就绪标志
+
+			if (threadIndex < threadCount - 1)        // 如果不是最后一个线程，直接唤醒最后一个线程（避免主线程一次唤醒所有线程，造成惊群效应）
+			{
+				threadWorkReady[threadIndex + 1].store(true, std::memory_order_release);
+			}
+
+			{
+				std::lock_guard<std::mutex> lock(workCompleteMutex);
+				workCompleteCv.notify_all();
+			}
+		}
+	}
 
 	// 主循环
 	void mainLoop()
@@ -347,9 +399,9 @@ class MultithreadedApplication
 
 	void cleanup()
 	{
+		stopThreads();                    // 销毁所有线程
 		glfwDestroyWindow(window);        // 销毁窗口
-
-		glfwTerminate();        // 清理 glfw 资源
+		glfwTerminate();                  // 清理 glfw 资源
 	}
 
 	// 重建交换链（窗口大小改变时调用）
@@ -368,6 +420,45 @@ class MultithreadedApplication
 		cleanupSwapChain();
 		createSwapChain();
 		createImageViews();
+	}
+
+	// 销毁所有线程
+	void stopThreads()
+	{
+		shouldExit.store(true, std::memory_order_release);
+
+		for (uint32_t i = 0; i < threadCount; i++)
+		{
+			threadWorkDone[i].store(true, std::memory_order_release);        // 设置退出标志
+
+			for (uint32_t i = 0; i < threadCount; i++)        // 强制标记所有工作已完成，且不再就绪
+			{
+				threadWorkDone[i].store(true, std::memory_order_release);
+				threadWorkReady[i].store(false, std::memory_order_release);
+			}
+
+			{
+				std::lock_guard<std::mutex> lock(workCompleteMutex);
+				workCompleteCv.notify_all();        // 唤醒所有阻塞在 wait 的线程
+			}
+
+			for (auto &thread : workerThreads)        // 等待所有线程结束
+			{
+				if (thread.joinable())
+				{
+					thread.join();
+				}
+			}
+
+			workerThreads.clear();
+		}
+	}
+
+	// 初始化资源
+	void initThreadResources()
+	{
+		resourceManager.createThrreadCommandPools(device, queueIndex, threadCount);
+		resourceManager.allocateCommandBuffers(device, threadCount, 1);
 	}
 
 	// 创建 Vulkan 实例
@@ -1127,15 +1218,30 @@ class MultithreadedApplication
 	}
 
 	// 录制命令缓冲
-	void recordComputeCommandBuffer()
+	void recordComputeCommandBuffer(vk::raii::CommandBuffer &cmdBuffer, uint32_t startIndex, uint32_t count)
 	{
-		auto &commandBuffer = computeCommandBuffers[frameIndex];
-		commandBuffer.reset();
-		commandBuffer.begin({});
-		commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, computePipeline);        // 管线绑定点，区分要把这个命令发给哪条管线（图形管线 / 计算管线 / 光线追踪管线）
-		commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, computePipelineLayout, 0, {computeDescriptorSets[frameIndex]}, {});
-		commandBuffer.dispatch(PARTICLE_COUNT / 256, 1, 1);
-		commandBuffer.end();
+		cmdBuffer.reset();
+
+		vk::CommandBufferBeginInfo beginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
+		cmdBuffer.begin(beginInfo);
+
+		cmdBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, computePipeline);        // 管线绑定点，区分要把这个命令发给哪条管线（图形管线 / 计算管线 / 光线追踪管线）
+		cmdBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, computePipelineLayout, 0, {*computeDescriptorSets[frameIndex]}, {});
+
+		struct PushConstants        // 推送常量，极快的小数据传递方式，不经过显存，直接存放在寄存器中（Vulkan 标准规定至少为 128 字节，桌面级显卡一般支持 256 字节）
+		{
+			uint32_t startIndex;
+			uint32_t count;
+		} pushConstants{startIndex, count};
+
+		cmdBuffer.pushConstants<PushConstants>(*computePipelineLayout, vk::ShaderStageFlagBits::eCompute, 0, pushConstants);
+
+		uint32_t groupCount = (count + 255) / 256;
+
+		// Global.x = 组坐标.x * Shader 定义的组大小.x + 组内坐标.x（gl_GlobalInvocationID.x = gl_WorkGroupID.x * gl_WorkGroupSize.x + gl_LocalInvocationID.x）
+		// groupCount * 1 * 1 个工作组（线程块），shader 定义每个工作组的线程数量（1 维工作组可以用 3 维线程坐标）
+		cmdBuffer.dispatch(groupCount, 1, 1);
+		cmdBuffer.end();
 	}
 
 	// 创建每帧的同步对象
