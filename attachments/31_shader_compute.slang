@@ -41,6 +41,12 @@ struct UniformBuffer {
 };
 ConstantBuffer<UniformBuffer> ubo;
 
+struct PushConstants{
+    uint startIndex;
+    uint count;
+};
+[[vk::push_constant]] PushConstants pushConstants;
+
 struct ParticleSSBO {
     Particle particles;
 };
@@ -53,14 +59,18 @@ RWStructuredBuffer<ParticleSSBO> particlesOut;
 [numthreads(256, 1, 1)]
 void compMain(uint3 threadId: SV_DispatchThreadID)
 {
-    uint index = threadId.x;
-    particlesOut[index].particles.position = particlesIn[index].particles.position + particlesIn[index].particles.velocity.xy * ubo.deltaTime;
-    particlesOut[index].particles.velocity = particlesIn[index].particles.velocity;
+    uint localIndex = threadId.x;
+    if (localIndex < pushConstants.count)
+    {    
+        uint globalIndex = pushConstants.startIndex + localIndex;
+        particlesOut[globalIndex].particles.position = particlesIn[globalIndex].particles.position + particlesIn[globalIndex].particles.velocity.xy * ubo.deltaTime;
+        particlesOut[globalIndex].particles.velocity = particlesIn[globalIndex].particles.velocity;
 
-    if ((particlesOut[index].particles.position.x <= -1.0) || (particlesOut[index].particles.position.x >= 1.0)) {
-        particlesOut[index].particles.velocity.x = -particlesOut[index].particles.velocity.x;
-    }
-    if ((particlesOut[index].particles.position.y <= -1.0) || (particlesOut[index].particles.position.y >= 1.0)) {
-        particlesOut[index].particles.velocity.y = -particlesOut[index].particles.velocity.y;
+        if ((particlesOut[globalIndex].particles.position.x <= -1.0) || (particlesOut[globalIndex].particles.position.x >= 1.0)) {
+            particlesOut[globalIndex].particles.velocity.x = -particlesOut[globalIndex].particles.velocity.x;
+        }
+        if ((particlesOut[globalIndex].particles.position.y <= -1.0) || (particlesOut[globalIndex].particles.position.y >= 1.0)) {
+            particlesOut[globalIndex].particles.velocity.y = -particlesOut[globalIndex].particles.velocity.y;
+        }
     }
 }

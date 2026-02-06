@@ -83,7 +83,7 @@ class ThreadSafeResourceManager
 
   public:
 	// 为指定数量的线程创建命令池
-	void createThrreadCommandPools(vk::raii::Device &device, uint32_t queueFamilyIndex, uint32_t threadCount)
+	void createThreadCommandPools(vk::raii::Device &device, uint32_t queueFamilyIndex, uint32_t threadCount)
 	{
 		std::lock_guard<std::mutex> lock(resourceMutex);
 
@@ -108,10 +108,13 @@ class ThreadSafeResourceManager
 	}
 
 	// 获取特定线程的命令池（线程安全）
-	vk::raii::CommandPool &getCommandPool(uint32_t threadIndex)
+	vk::raii::CommandPool &getCommandPool(uint32_t index)
 	{
-		std::lock_guard lock(resourceMutex);
-		return commandPools[threadIndex];
+		if (index >= commandBuffers.size()) {
+			throw std::runtime_error("Command buffer index out of range: " + std::to_string(index) +
+			                         " (available: " + std::to_string(commandBuffers.size()) + ")");
+		}
+		return commandPools[index];
 	}
 
 	// 为每个线程分配命令缓冲
@@ -165,6 +168,7 @@ class MultithreadedApplication
 	{
 		initWindow();
 		initVulkan();
+		initThreads();
 		mainLoop();
 		cleanup();
 	}
@@ -202,14 +206,15 @@ class MultithreadedApplication
 	vk::raii::DescriptorPool             descriptorPool = nullptr;        // 描述符池
 	std::vector<vk::raii::DescriptorSet> computeDescriptorSets;           // 描述符集
 
-	vk::raii::CommandPool                commandPool = nullptr;        // 命令池，用于分配命令缓冲
-	std::vector<vk::raii::CommandBuffer> commandBuffers;               // 命令缓冲，用于记录绘图指令
-	std::vector<vk::raii::CommandBuffer> computeCommandBuffers;        // 独立的计算命令缓冲
+	vk::raii::CommandPool                commandPool = nullptr;         // 命令池，用于分配命令缓冲
+	std::vector<vk::raii::CommandBuffer> graphicsCommandBuffers;        // 命令缓冲，用于记录绘图指令
 
-	vk::raii::Semaphore          semaphore     = nullptr;
-	uint64_t                     timelineValue = 0;        // 时间轴信号量
-	std::vector<vk::raii::Fence> inFlightFences;           // CPU 等待 GPU 完成的栅栏
-	uint32_t                     frameIndex = 0;           // 当前帧索引（0 或 1）
+	vk::raii::Semaphore              timelineSemaphore = nullptr;
+	uint64_t                         timelineValue     = 0;           // 时间轴信号量
+	std::vector<vk::raii::Semaphore> imageAvailableSemaphores;        // 交换链获取的图像是否可用
+	std::vector<vk::raii::Semaphore> renderFinishedSemaphores;         // 渲染完成信号（GPU内，图像）
+	std::vector<vk::raii::Fence>     inFlightFences;                  // CPU 等待 GPU 完成的栅栏
+	uint32_t                         frameIndex = 0;                  // 当前帧索引（0 或 1）
 
 	double lastFrameTime = 0.0;
 
@@ -235,11 +240,113 @@ class MultithreadedApplication
 		uint32_t startIndex;
 		uint32_t count;
 	};
+
 	std::vector<ParticleGroup> particleGroups;
 
 	std::vector<const char *> requiredDeviceExtension = {
 	    vk::KHRSwapchainExtensionName,        // 需要的物理设备拓展
 	};
+
+	[[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char> &code) const
+	{
+		vk::ShaderModuleCreateInfo createInfo{
+		    .codeSize = code.size() * sizeof(char),
+		    .pCode    = reinterpret_cast<const uint32_t *>(code.data())};
+		vk::raii::ShaderModule shaderModule{device, createInfo};
+
+		return shaderModule;
+	}
+
+	// 辅助函数，选择最小图像数量
+	static uint32_t chooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const &surfaceCapabilities)
+	{
+		auto minImageCount = std::max(3u, surfaceCapabilities.minImageCount);        // 尝试请求至少 3 张图像
+
+		if ((0 < surfaceCapabilities.maxImageCount) && (surfaceCapabilities.maxImageCount < minImageCount))
+		{
+			minImageCount = surfaceCapabilities.maxImageCount;        // 显卡不支持三缓冲，就只能用双缓冲
+		}
+		return minImageCount;
+	}
+
+	// 辅助函数，选择 Surface 格式
+	static vk::SurfaceFormatKHR chooseSwapSurfaceFormat(std::vector<vk::SurfaceFormatKHR> const &availableFormats)
+	{
+		assert(!availableFormats.empty());
+
+		const auto formatIt = std::ranges::find_if(
+		    availableFormats,
+		    [](const auto &format) {
+			    return format.format == vk::Format::eB8G8R8A8Srgb && format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;        // eB8G8R8A8Srgb（GPU 内部） : Shader 输出颜色时 GPU 自动做 x^{1/2.2} 编码，Texture Sampler 采样时 GPU 自动做 x^{2.2} 解码
+		    });                                                                                                                     // eSrgbNonlinear 显示器怎么解释这个显存数据（色域不同）
+
+		return formatIt != availableFormats.end() ? *formatIt : availableFormats[0];
+	}
+
+	// 辅助函数，选择呈现模式
+	static vk::PresentModeKHR chooseSwapPresentMode(const std::vector<vk::PresentModeKHR> &availablePresentModes)
+	{
+		assert(std::ranges::any_of(availablePresentModes, [](auto presentMode) { return presentMode == vk::PresentModeKHR::eFifo; }));
+
+		return std::ranges::any_of(availablePresentModes, [](const vk::PresentModeKHR value) { return vk::PresentModeKHR::eMailbox == value; }) ?
+		           vk::PresentModeKHR::eMailbox :        // 首选 Mailbox
+		           vk::PresentModeKHR::eFifo;            // 垂直同步
+	}
+
+	// 辅助函数，选择 Swap Extent
+	vk::Extent2D chooseSwapExtent(const vk::SurfaceCapabilitiesKHR &capabilities)
+	{
+		if (capabilities.currentExtent.width != 0xFFFFFFFF)        // 驱动是否写死了窗口大小
+		{
+			return capabilities.currentExtent;        // 驱动写死了窗口大小
+		}
+
+		int width, height;
+		glfwGetFramebufferSize(window, &width, &height);        // 询问显示器要渲染的图像大小，由于显示器的缩放，glCreateWindow 的宽高参数会被缩放，缩放后才是真实要渲染的图像大小
+
+		return {// 确保图像分辨率在显卡支持的范围内
+		        std::clamp<uint32_t>(width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
+		        std::clamp<uint32_t>(height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height)};
+	}
+
+	std::vector<const char *> getRequiredExtensions()
+	{
+		uint32_t glfwExtensionCount = 0;
+		auto     glfwExtensions     = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+
+		std::vector extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
+
+		if (enableValidationLayers)
+		{
+			extensions.push_back(vk::EXTDebugUtilsExtensionName);        // 允许注册验证层的回调函数
+		}
+
+		return extensions;
+	}
+
+	static VKAPI_ATTR vk::Bool32 VKAPI_CALL debugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity, vk::DebugUtilsMessageTypeFlagsEXT type, const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData, void *)
+	{
+		if (severity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eError || severity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning)
+		{
+			std::cerr << "validation layer: type" << to_string(type) << " msg: " << pCallbackData->pMessage << std::endl;
+		}
+
+		return vk::False;
+	}
+
+	static std::vector<char> readFile(const std::string &filename)
+	{
+		std::ifstream file(filename, std::ios::ate | std::ios::binary);        // 从文件末尾开始，以二进制格式读取
+		if (!file.is_open())
+		{
+			throw std::runtime_error("failed to open file");
+		}
+		std::vector<char> buffer(file.tellg());                                       // 由于从文件末尾开始读，可以通过当前读指针确定缓冲区大小
+		file.seekg(0, std::ios::beg);                                                 // 回到文件开头
+		file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));        // 读文件所有数据
+		file.close();
+		return buffer;
+	}
 
 	void initWindow()
 	{
@@ -279,8 +386,7 @@ class MultithreadedApplication
 		createUniformBuffers();
 		createDescriptorPool();
 		createComputeDescriptorSets();        // 分配计算描述符集合
-		createCommandBuffers();
-		createComputeCommandBuffers();        // 分配计算命令缓冲
+		createGraphicsCommandBuffers();
 		createSyncObjects();
 	}
 
@@ -317,7 +423,7 @@ class MultithreadedApplication
 		// 启动实际的 C++ 线程
 		for (uint32_t i = 0; i < threadCount; i++)
 		{
-			workerThreads.emplace_back(&MultithreadedApplication::workerThreads, this, i);
+			workerThreads.emplace_back(&MultithreadedApplication::workerThreadFunc, this, i);
 			log("Started worker thread ", i);
 		}
 	}
@@ -365,7 +471,7 @@ class MultithreadedApplication
 			threadWorkDone[threadIndex].store(true, std::memory_order_release);          // 标记工作完成
 			threadWorkReady[threadIndex].store(false, std::memory_order_release);        // 重置就绪标志
 
-			if (threadIndex < threadCount - 1)        // 如果不是最后一个线程，直接唤醒最后一个线程（避免主线程一次唤醒所有线程，造成惊群效应）
+			if (threadIndex < threadCount - 1)        // 问题非常大，直接给整成串行执行了（唤醒当前线程的下一个线程）
 			{
 				threadWorkReady[threadIndex + 1].store(true, std::memory_order_release);
 			}
@@ -380,13 +486,24 @@ class MultithreadedApplication
 	// 主循环
 	void mainLoop()
 	{
+		const double targetFrameTime = 1.0 / 60.0;
+
 		while (!glfwWindowShouldClose(window))
 		{
+			double frameStartTime = glfwGetTime();
+
 			glfwPollEvents();        // 取出上一帧积压的输入（操作系统用事件队列保存上一帧积压的输入事件）
 			drawFrame();
+
 			double currentTime = glfwGetTime();
 			lastFrameTime      = (currentTime - lastTime) * 1000.0;
 			lastTime           = currentTime;
+
+			double frameTime = currentTime - frameStartTime;
+			if (frameTime < targetFrameTime) {
+				double sleepTime = targetFrameTime - frameTime;
+				std::this_thread::sleep_for(std::chrono::duration<double>(sleepTime));
+			}
 		}
 		device.waitIdle();        // 避免在 GPU 结束工作前关闭窗口，释放显存资源，导致 GPU 非法访问释放的资源，进而驱动崩溃
 	}
@@ -457,7 +574,7 @@ class MultithreadedApplication
 	// 初始化资源
 	void initThreadResources()
 	{
-		resourceManager.createThrreadCommandPools(device, queueIndex, threadCount);
+		resourceManager.createThreadCommandPools(device, queueIndex, threadCount);
 		resourceManager.allocateCommandBuffers(device, threadCount, 1);
 	}
 
@@ -784,16 +901,23 @@ class MultithreadedApplication
 
 	void createComputePipeline()
 	{
-		vk::raii::ShaderModule            shaderModule = createShaderModule(readFile("shaders/slang.spv"));        // 加载并创建着色器模块
+		vk::raii::ShaderModule shaderModule = createShaderModule(readFile("shaders/slang.spv"));        // 加载并创建着色器模块
+
+		vk::PushConstantRange pushConstantRange{
+		    .stageFlags = vk::ShaderStageFlagBits::eCompute,
+		    .offset     = 0,
+		    .size       = sizeof(uint32_t) * 2};
+
 		vk::PipelineShaderStageCreateInfo computeShaderStageInfo{
 		    .stage  = vk::ShaderStageFlagBits::eCompute,        // 计算着色器阶段
 		    .module = shaderModule,                             // 绑定加载好的着色器模块
 		    .pName  = "compMain"                                // 着色器的入口函数名
 		};
 		vk::PipelineLayoutCreateInfo pipelineLayoutInfo{
-		    .setLayoutCount = 1,                                  // 使用 1 个描述符集布局
-		    .pSetLayouts    = &*computeDescriptorSetLayout        // 计算着色器布局指针
-		};
+		    .setLayoutCount         = 1,                                   // 使用 1 个描述符集布局
+		    .pSetLayouts            = &*computeDescriptorSetLayout,        // 计算着色器布局指针
+		    .pushConstantRangeCount = 1,
+		    .pPushConstantRanges    = &pushConstantRange};
 		computePipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);        // 创建管线布局对象
 
 		vk::ComputePipelineCreateInfo pipelineInfo{
@@ -828,8 +952,12 @@ class MultithreadedApplication
 			float theta       = rndDist(rndEngine) * 2.0f * 3.14159265358979323846f;        // 生成极坐标旋转角度 theta
 			float x           = r * cosf(theta) * HEIGHT / WIDTH;                           // 将极坐标转为笛卡尔坐标系
 			float y           = r * sinf(theta);
-			particle.position = glm::vec2(x, y);                                                                    // 设置位置
-			particle.velocity = normalize(glm::vec2(x, y)) * 0.00025f;                                              // 设置初速度
+			particle.position = glm::vec2(x, y);          // 设置位置
+
+			float minVelocity = 0.001f;
+			float velocityScale = 0.003f;
+			float velocityMagnitude = std::max(minVelocity, r * velocityScale);
+			particle.velocity = normalize(glm::vec2(x, y)) * velocityMagnitude * 0.2f;                                              // 设置初速度
 			particle.color    = glm::vec4(rndDist(rndEngine), rndDist(rndEngine), rndDist(rndEngine), 1.0f);        // 设置颜色，RGB 随机，A 固定在 1.0
 		}
 		vk::DeviceSize         bufferSize = sizeof(Particle) * PARTICLE_COUNT;
@@ -944,7 +1072,7 @@ class MultithreadedApplication
 
 			// 绑定 1，上一帧的 SSBO（读取上一帧计算好的粒子位置）
 			vk::DescriptorBufferInfo storageBufferInfoLastFrame(
-			    shaderStorageBuffers[(i - 1) % MAX_FRAMES_IN_FLIGHT],
+			    shaderStorageBuffers[(i - 1 + MAX_FRAMES_IN_FLIGHT) % MAX_FRAMES_IN_FLIGHT],
 			    0,
 			    sizeof(Particle) * PARTICLE_COUNT);
 
@@ -1087,33 +1215,51 @@ class MultithreadedApplication
 		throw std::runtime_error("failed to find suitable memory type");
 	};
 
-	void createCommandBuffers()
+	void createGraphicsCommandBuffers()
 	{
+		graphicsCommandBuffers.clear();
 		vk::CommandBufferAllocateInfo allocInfo{
 		    .commandPool        = commandPool,                             // 从哪个命令池分配命令缓冲
 		    .level              = vk::CommandBufferLevel::ePrimary,        // 主要缓冲，可以直接提交给队列执行
 		    .commandBufferCount = MAX_FRAMES_IN_FLIGHT                     // 分配(两个)命令缓冲
 		};
-		commandBuffers = vk::raii::CommandBuffers(device, allocInfo);        // CommandBuffers 函数返回的是命令缓冲数组
+		graphicsCommandBuffers = vk::raii::CommandBuffers(device, allocInfo);        // CommandBuffers 函数返回的是命令缓冲数组
 	}
 
-	// 创建计算管线专用的命令缓冲
-	void createComputeCommandBuffers()
+	// 录制计算管线命令缓冲
+	void recordComputeCommandBuffer(vk::raii::CommandBuffer &cmdBuffer, uint32_t startIndex, uint32_t count)
 	{
-		computeCommandBuffers.clear();
-		vk::CommandBufferAllocateInfo allocInfo{
-		    .commandPool        = *commandPool,
-		    .level              = vk::CommandBufferLevel::ePrimary,
-		    .commandBufferCount = MAX_FRAMES_IN_FLIGHT,
-		};
-		computeCommandBuffers = vk::raii::CommandBuffers(device, allocInfo);
+		cmdBuffer.reset();
+
+		vk::CommandBufferBeginInfo beginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
+		cmdBuffer.begin(beginInfo);
+
+		cmdBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, computePipeline);        // 管线绑定点，区分要把这个命令发给哪条管线（图形管线 / 计算管线 / 光线追踪管线）
+		cmdBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, computePipelineLayout, 0, {*computeDescriptorSets[frameIndex]}, {});
+
+		struct PushConstants        // 推送常量，极快的小数据传递方式，不经过显存，直接存放在寄存器中（Vulkan 标准规定至少为 128 字节，桌面级显卡一般支持 256 字节）
+		{
+			uint32_t startIndex;
+			uint32_t count;
+		} pushConstants{startIndex, count};
+
+		cmdBuffer.pushConstants<PushConstants>(*computePipelineLayout, vk::ShaderStageFlagBits::eCompute, 0, pushConstants);
+
+		uint32_t groupCount = (count + 255) / 256;
+
+		// Global.x = 组坐标.x * Shader 定义的组大小.x + 组内坐标.x（gl_GlobalInvocationID.x = gl_WorkGroupID.x * gl_WorkGroupSize.x + gl_LocalInvocationID.x）
+		// groupCount * 1 * 1 个工作组（线程块），shader 定义每个工作组的线程数量（1 维工作组可以用 3 维线程坐标）
+		cmdBuffer.dispatch(groupCount, 1, 1);
+		cmdBuffer.end();
 	}
 
-	// 录制命令缓冲
-	void recordCommandBuffer(uint32_t imageIndex)
+	// 录制图形管线命令缓冲
+	void recordGraphicsCommandBuffer(uint32_t imageIndex)
 	{
-		auto &commandBuffer = commandBuffers[frameIndex];
-		commandBuffer.begin({});        // 开始录制命令
+		graphicsCommandBuffers[frameIndex].reset();
+
+		vk::CommandBufferBeginInfo beginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
+		graphicsCommandBuffers[frameIndex].begin({beginInfo});        // 开始录制命令
 
 		transition_image_layout(        // 转换 Swapchain 图像布局
 		    swapChainImages[imageIndex],
@@ -1143,33 +1289,33 @@ class MultithreadedApplication
 		    .pColorAttachments    = &colorAttachmentInfo,                                 // 链接颜色附件
 		};
 
-		commandBuffer.beginRendering(renderingInfo);        // 开始动态渲染
+		graphicsCommandBuffers[frameIndex].beginRendering(renderingInfo);        // 开始动态渲染
 
-		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);        // 绑定图形管线（告诉 GPU 使用那套着色器和装态配置）
+		graphicsCommandBuffers[frameIndex].bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);        // 绑定图形管线（告诉 GPU 使用那套着色器和装态配置）
 
-		commandBuffer.setViewport(0,                                                     // 第 0 号视口（Vulkan 支持同时使用多个视口，分屏游戏）
-		                          vk::Viewport(                                          // 设置动态视口
-		                              0.0f, 0.0f,                                        // 视口矩形左上角坐标
-		                              static_cast<float>(swapChainExtent.width),         // 视口宽度
-		                              static_cast<float>(swapChainExtent.height),        // 视口高度
-		                              0.0f,                                              // 最小深度（Vulkan 的 NDC 空间与 DirectX 保持一致，与 OpenGL 不同）(Vulkan 的 NDC 的 z 轴范围是 [0, 1]，不再是标准立方体的 [-1, 1]）
-		                              1.0f                                               // 最大深度
-		                              ));
+		graphicsCommandBuffers[frameIndex].setViewport(0,                                                     // 第 0 号视口（Vulkan 支持同时使用多个视口，分屏游戏）
+		                                               vk::Viewport(                                          // 设置动态视口
+		                                                   0.0f, 0.0f,                                        // 视口矩形左上角坐标
+		                                                   static_cast<float>(swapChainExtent.width),         // 视口宽度
+		                                                   static_cast<float>(swapChainExtent.height),        // 视口高度
+		                                                   0.0f,                                              // 最小深度（Vulkan 的 NDC 空间与 DirectX 保持一致，与 OpenGL 不同）(Vulkan 的 NDC 的 z 轴范围是 [0, 1]，不再是标准立方体的 [-1, 1]）
+		                                                   1.0f                                               // 最大深度
+		                                                   ));
 
-		commandBuffer.setScissor(0,                             // 对应第 0 号视口的裁剪区域
-		                         vk::Rect2D(                    // 设置动态裁剪
-		                             vk::Offset2D(0, 0),        // 左上角起点
-		                             swapChainExtent            // 裁剪矩形宽高
-		                             ));
+		graphicsCommandBuffers[frameIndex].setScissor(0,                             // 对应第 0 号视口的裁剪区域
+		                                              vk::Rect2D(                    // 设置动态裁剪
+		                                                  vk::Offset2D(0, 0),        // 左上角起点
+		                                                  swapChainExtent            // 裁剪矩形宽高
+		                                                  ));
 
-		commandBuffer.bindVertexBuffers(0,                                         // 将 Buffer 绑定到管线的 0 号绑定点（管线创建时已经将 0 号绑定点解释为了顶点缓冲区）
-		                                {shaderStorageBuffers[frameIndex]},        // 顶点缓冲区
-		                                {0}                                        // 从 buffer 的第 0 个字节开始读
+		graphicsCommandBuffers[frameIndex].bindVertexBuffers(0,                                         // 将 Buffer 绑定到管线的 0 号绑定点（管线创建时已经将 0 号绑定点解释为了顶点缓冲区）
+		                                                     {shaderStorageBuffers[frameIndex]},        // 顶点缓冲区
+		                                                     {0}                                        // 从 buffer 的第 0 个字节开始读
 		);
 
-		commandBuffer.draw(PARTICLE_COUNT, 1, 0, 0);
+		graphicsCommandBuffers[frameIndex].draw(PARTICLE_COUNT, 1, 0, 0);
 
-		commandBuffer.endRendering();        // 结束动态渲染
+		graphicsCommandBuffers[frameIndex].endRendering();        // 结束动态渲染
 
 		// 转换 Swapchain 图像布局，准备显示
 		transition_image_layout(
@@ -1182,7 +1328,7 @@ class MultithreadedApplication
 		    vk::PipelineStageFlagBits2::eBottomOfPipe,
 		    vk::ImageAspectFlagBits::eColor);
 
-		commandBuffer.end();        // 结束录制
+		graphicsCommandBuffers[frameIndex].end();        // 结束录制
 	}
 
 	// 在主循环阶段的屏障
@@ -1214,34 +1360,49 @@ class MultithreadedApplication
 		    .pImageMemoryBarriers    = &barrier        // 图像内存屏障（数组）起始地址
 		};
 
-		commandBuffers[frameIndex].pipelineBarrier2(dependency_info);        // 录制屏障指令
+		graphicsCommandBuffers[frameIndex].pipelineBarrier2(dependency_info);        // 录制屏障指令
 	}
 
-	// 录制命令缓冲
-	void recordComputeCommandBuffer(vk::raii::CommandBuffer &cmdBuffer, uint32_t startIndex, uint32_t count)
+	// 主线程启动一个工作线程
+	void signalThreadsToWork()
 	{
-		cmdBuffer.reset();
-
-		vk::CommandBufferBeginInfo beginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit};
-		cmdBuffer.begin(beginInfo);
-
-		cmdBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, computePipeline);        // 管线绑定点，区分要把这个命令发给哪条管线（图形管线 / 计算管线 / 光线追踪管线）
-		cmdBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, computePipelineLayout, 0, {*computeDescriptorSets[frameIndex]}, {});
-
-		struct PushConstants        // 推送常量，极快的小数据传递方式，不经过显存，直接存放在寄存器中（Vulkan 标准规定至少为 128 字节，桌面级显卡一般支持 256 字节）
+		for (uint32_t i = 0; i < threadCount; i++)
 		{
-			uint32_t startIndex;
-			uint32_t count;
-		} pushConstants{startIndex, count};
+			threadWorkDone[i].store(false, std::memory_order_release);        // 按遍历顺序对其他线程依次可见（这里只规定可见性顺序，不确保立即可见，只有全屏障会保证立即可见）
+		}
 
-		cmdBuffer.pushConstants<PushConstants>(*computePipelineLayout, vk::ShaderStageFlagBits::eCompute, 0, pushConstants);
+		std::atomic_thread_fence(std::memory_order_seq_cst);        // 内存屏障，确保上述写入对所有线程可见
 
-		uint32_t groupCount = (count + 255) / 256;
+		threadWorkReady[0].store(true, std::memory_order_seq_cst);
 
-		// Global.x = 组坐标.x * Shader 定义的组大小.x + 组内坐标.x（gl_GlobalInvocationID.x = gl_WorkGroupID.x * gl_WorkGroupSize.x + gl_LocalInvocationID.x）
-		// groupCount * 1 * 1 个工作组（线程块），shader 定义每个工作组的线程数量（1 维工作组可以用 3 维线程坐标）
-		cmdBuffer.dispatch(groupCount, 1, 1);
-		cmdBuffer.end();
+		{
+			std::lock_guard<std::mutex> lock(workCompleteMutex);
+			workCompleteCv.notify_all();        // 唤醒所有的沉睡线程，以确保第一个线程能工作
+		}
+	}
+
+	// 主线程等待工作线程结束
+	void waitForThreadsToComplete()
+	{
+		std::unique_lock<std::mutex> lock(workCompleteMutex);
+
+		// 等待最后一个线程的 workDone 标志变为 true
+		auto waitResult = workCompleteCv.wait_for(lock, std::chrono::milliseconds(3000), [this]() {
+			return threadWorkDone[threadCount - 1].load(std::memory_order_acquire);
+		});
+
+		// 超时处理
+		if (!waitResult)
+		{
+			for (uint32_t i = 0; i < threadCount; i++)
+			{
+				threadWorkDone[i].store(true, std::memory_order_release);
+				threadWorkReady[i].store(true, std::memory_order_acquire);
+			}
+			workCompleteCv.notify_all();
+			lock.unlock();
+			std::this_thread::sleep_for(std::chrono::milliseconds(100));
+		}
 	}
 
 	// 创建每帧的同步对象
@@ -1250,16 +1411,25 @@ class MultithreadedApplication
 	// 管线屏障是同队列的不同命令的同步
 	void createSyncObjects()
 	{
+		imageAvailableSemaphores.clear();        // 交换链获取的图像是否可用
 		inFlightFences.clear();
+		renderFinishedSemaphores.clear();
 
 		vk::SemaphoreTypeCreateInfo semaphoreType{.semaphoreType = vk::SemaphoreType::eTimeline, .initialValue = 0};        // 创建时间信号量
-		semaphore     = vk::raii::Semaphore(device, {.pNext = &semaphoreType});
-		timelineValue = 0;
+		timelineSemaphore = vk::raii::Semaphore(device, {.pNext = &semaphoreType});
+		timelineValue     = 0;
 
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)        // 为每一帧创建同步对象
 		{
-			vk::FenceCreateInfo fenceInfo{};
-			inFlightFences.emplace_back(device, fenceInfo);        // 某工作帧，所有工作完成标志（初始栅栏必须是已触发状态，否则会导致第一帧死锁）
+			imageAvailableSemaphores.emplace_back(device, vk::SemaphoreCreateInfo());        // 创建信号量
+			vk::FenceCreateInfo fenceInfo;
+			fenceInfo.flags = vk::FenceCreateFlagBits::eSignaled;
+			inFlightFences.emplace_back(device, fenceInfo);        // 创建栅栏，某工作帧，所有工作完成标志（初始栅栏必须是已触发状态，否则会导致第一帧死锁）
+		}
+
+		for (size_t i = 0; i < swapChainImages.size(); i++)
+		{
+			renderFinishedSemaphores.emplace_back(device, vk::SemaphoreCreateInfo());
 		}
 	}
 
@@ -1274,25 +1444,63 @@ class MultithreadedApplication
 	// 绘制帧
 	void drawFrame()
 	{
-		auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, nullptr, *inFlightFences[frameIndex]);        // 这里没有考量图像是否可用，理论上有风险
-		auto fenceResult          = device.waitForFences(*inFlightFences[frameIndex], vk::True, UINT64_MAX);             // CPU 等待图像可用
+		auto fenceResult = device.waitForFences(*inFlightFences[frameIndex], vk::True, UINT64_MAX);        // CPU 等待上一帧的 GPU 任务完成
 		if (fenceResult != vk::Result::eSuccess)
 		{
 			throw std::runtime_error("failed to wait for fence!");
 		}
 
-		device.resetFences(*inFlightFences[frameIndex]);        // 手动将栅栏重置为 Unsignaled 状态（表示当前帧工作处于未完成状态）
+		if (framebufferResized)
+		{
+			recreateSwapChain();
+			framebufferResized = false;
+			return;
+		}
 
-		uint64_t computeWaitValue    = timelineValue;             // Compute 等待的值
+		auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *imageAvailableSemaphores[frameIndex], nullptr);        // imageAvailableSemaphores 将在图像真正可用时被 Signal
+
+		if (result == vk::Result::eErrorOutOfDateKHR)
+		{
+			recreateSwapChain();
+			return;
+		}
+		else if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR)
+		{
+			throw std::runtime_error("failed to acquire swap chain image!");
+		}
+
+		// device.resetFences(*inFlightFences[frameIndex]);        // 手动将栅栏重置为 Unsignaled 状态（表示当前帧工作处于未完成状态）
+
+		uint64_t computeWaitValue    = timelineValue;             // Compute 等待上一帧 Graphics 结束的值
 		uint64_t computeSignalValue  = ++timelineValue;           // Compute 完成后 Signal 的值
 		uint64_t graphicsWaitValue   = computeSignalValue;        // Graphics 等待 Compute 完成
 		uint64_t graphicsSignalValue = ++timelineValue;           // Graphics 完成后 Signal 的值
 
 		updateUniformBuffer(frameIndex);        // 更新 UBO 缓冲区
 
+		signalThreadsToWork();        // 命令所有工作线程开始录制 Compute Command Buffer（CPU 并行）
+
+		recordGraphicsCommandBuffer(imageIndex);        // 主线程开始录制 Graphic Command Buffer
+
+		waitForThreadsToComplete();        // 阻塞主线程，直到所有工作线程完成录制
+
 		// 提交计算队列任务
 		{
-			recordComputeCommandBuffer();
+			std::vector<vk::CommandBuffer> computeCmdBuffers;
+			computeCmdBuffers.reserve(threadCount);
+
+			for (uint32_t i = 0; i < threadCount; i++)
+			{
+				try
+				{
+					computeCmdBuffers.push_back(*resourceManager.getCommandBuffer(i));
+				}
+				catch (const std::exception &)
+				{}
+			}
+
+			if (computeCmdBuffers.empty())
+				return;
 
 			vk::TimelineSemaphoreSubmitInfo computeTimelineInfo{
 			    .waitSemaphoreValueCount   = 1,
@@ -1305,189 +1513,95 @@ class MultithreadedApplication
 			const vk::SubmitInfo computeSubmitInfo{
 			    .pNext                = &computeTimelineInfo,
 			    .waitSemaphoreCount   = 1,
-			    .pWaitSemaphores      = &*semaphore,
+			    .pWaitSemaphores      = &*timelineSemaphore,
 			    .pWaitDstStageMask    = waitStages,
-			    .commandBufferCount   = 1,
-			    .pCommandBuffers      = &*computeCommandBuffers[frameIndex],
+			    .commandBufferCount   = static_cast<uint32_t>(computeCmdBuffers.size()),
+			    .pCommandBuffers      = &*computeCmdBuffers.data(),
 			    .signalSemaphoreCount = 1,
-			    .pSignalSemaphores    = &*semaphore};
+			    .pSignalSemaphores    = &*timelineSemaphore};
 
-			queue.submit(computeSubmitInfo, nullptr);        // 提交命令，这些命令完成后不触发 fence
+			{
+				std::lock_guard<std::mutex> lock(queueSubmitMutex);
+				queue.submit(computeSubmitInfo, nullptr);        // 提交命令，这些命令完成后不触发 fence
+			}
 		}
 
 		// 提交图形队列任务
 		{
-			recordCommandBuffer(imageIndex);
+			vk::PipelineStageFlags graphicsWaitStages[] = {vk::PipelineStageFlagBits::eVertexInput, vk::PipelineStageFlagBits::eColorAttachmentOutput};
 
-			// Graphics 必须等待 Compute 完成（读取 Vertex Input 阶段）
-			vk::PipelineStageFlags waitStages(vk::PipelineStageFlagBits::eVertexInput);
+			std::array<vk::Semaphore, 2> waitSemaphores = {*timelineSemaphore, *imageAvailableSemaphores[frameIndex]};        // 图形任务有俩个等待条件
 
-			vk::TimelineSemaphoreSubmitInfo graphicsTimelineInfo{
-			    .waitSemaphoreValueCount   = 1,
-			    .pWaitSemaphoreValues      = &graphicsWaitValue,
-			    .signalSemaphoreValueCount = 1,
-			    .pSignalSemaphoreValues    = &graphicsSignalValue};
+			std::array<uint64_t, 2> waitSemaphoreValues = {graphicsWaitValue, 0};        // 第二个 0 对于二值信号量会被忽略，不做等待
+
+			std::array<vk::Semaphore, 2> signalSemaphores = {
+			    *timelineSemaphore,                          // 给 CPU 或 Compute 用的
+			    *renderFinishedSemaphores[imageIndex]        // 专门给 Present 用的（新增的二进制信号量）
+			};
+
+			std::array<uint64_t, 2> signalValues = {
+			    graphicsSignalValue,        // Timeline 的目标值
+			    0                           // Binary Semaphore 不需要值
+			};
+
+			vk::TimelineSemaphoreSubmitInfo graphicsTimelineInfo
+			{
+				.waitSemaphoreValueCount   = static_cast<uint32_t>(waitSemaphoreValues.size()),
+				.pWaitSemaphoreValues      = waitSemaphoreValues.data(),
+				.signalSemaphoreValueCount = 2,
+			    .pSignalSemaphoreValues    = signalValues.data()        // 完成后发出信号
+			};
 
 			const vk::SubmitInfo graphicsSubmitInfo{
 			    .pNext                = &graphicsTimelineInfo,
-			    .waitSemaphoreCount   = 1,
-			    .pWaitSemaphores      = &*semaphore,
-			    .pWaitDstStageMask    = &waitStages,
+			    .waitSemaphoreCount   = static_cast<uint32_t>(waitSemaphoreValues.size()),
+			    .pWaitSemaphores      = &*waitSemaphores.data(),
+			    .pWaitDstStageMask    = graphicsWaitStages,
 			    .commandBufferCount   = 1,
-			    .pCommandBuffers      = &*commandBuffers[frameIndex],
-			    .signalSemaphoreCount = 1,
-			    .pSignalSemaphores    = &*semaphore};
+			    .pCommandBuffers      = &*graphicsCommandBuffers[frameIndex],        // 提交主线程录制的命令
+			    .signalSemaphoreCount = 2,
+			    .pSignalSemaphores    = &*signalSemaphores.data()};
 
-			queue.submit(graphicsSubmitInfo, nullptr);        // 提交命令，这些命令完成后不触发 fence
+			{
+				std::lock_guard<std::mutex> lock(queueSubmitMutex);
+				device.resetFences(*inFlightFences[frameIndex]);        // 下一帧开始时的 waitForFences 将等待这个 Fence
+				queue.submit(graphicsSubmitInfo, inFlightFences[frameIndex]);        // 提交命令，这些命令完成后不触发 fence
+			}
 
 			vk::SemaphoreWaitInfo waitInfo{
 			    .semaphoreCount = 1,
-			    .pSemaphores    = &*semaphore,
+			    .pSemaphores    = &*timelineSemaphore,
 			    .pValues        = &graphicsSignalValue};
 
-			auto result = device.waitSemaphores(waitInfo, UINT64_MAX);        // 让 CPU 阻塞，直到 Graphics 任务完成，让信号量更新到 graphicsSignalValue
-			if (result != vk::Result::eSuccess)
+			auto waitResult = device.waitSemaphores(waitInfo, 5000000000);        // 让 CPU 阻塞，直到 Graphics 任务完成，让信号量更新到 graphicsSignalValue		
+			if (waitResult == vk::Result::eTimeout)
 			{
-				throw std::runtime_error("failed to wait for semaphore!");
+				device.waitIdle();
+				return;
 			}
 
-			try
+			const vk::PresentInfoKHR presentInfoKHR{
+				.waitSemaphoreCount = 1,
+			    .pWaitSemaphores    = &*renderFinishedSemaphores[imageIndex],
+				.swapchainCount     = 1,
+				.pSwapchains        = &*swapChain,
+				.pImageIndices      = &imageIndex};        // 要展示的图片
+			result = queue.presentKHR(presentInfoKHR);
+			if ((result == vk::Result::eSuboptimalKHR) || (result == vk::Result::eErrorOutOfDateKHR) || framebufferResized)        // eSuboptimalKHR 表示交换链能用，但和当前窗口不完全匹配（如分辨率不同，但可拉伸），
+				                                                                                                                    // framebufferResized，在某些驱动上，改变窗口大小时可能仍返回 eSuccess，因为驱动通过自动缩放交换链图像以适应窗口尺寸
 			{
-				const vk::PresentInfoKHR presentInfoKHR{
-				    .waitSemaphoreCount = 0,
-				    .pWaitSemaphores    = nullptr,
-				    .swapchainCount     = 1,
-				    .pSwapchains        = &*swapChain,
-				    .pImageIndices      = &imageIndex};        // 要展示的图片
-				result = queue.presentKHR(presentInfoKHR);
-				if ((result == vk::Result::eSuboptimalKHR) || (result == vk::Result::eErrorOutOfDateKHR) || framebufferResized)        // eSuboptimalKHR 表示交换链能用，但和当前窗口不完全匹配（如分辨率不同，但可拉伸），
-				                                                                                                                       // framebufferResized，在某些驱动上，改变窗口大小时可能仍返回 eSuccess，因为驱动通过自动缩放交换链图像以适应窗口尺寸
-				{
-					framebufferResized = false;
-					recreateSwapChain();
-				}
-				else if (result != vk::Result::eSuccess)
-				{
-					throw std::runtime_error("failed to present swap chain image!");
-				}
+				framebufferResized = false;
+				recreateSwapChain();
 			}
-			catch (const vk::SystemError &e)
+			else
 			{
-				if (e.code().value() == static_cast<int>(vk::Result::eErrorOutOfDateKHR))        // 交换链彻底失效，需要重建
-				{
-					recreateSwapChain();
-					return;
-				}
-				else
-				{
-					throw;
-				}
+				assert(result == vk::Result::eSuccess);
 			}
 		}
 		frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
 	}
-
-	[[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char> &code) const
-	{
-		vk::ShaderModuleCreateInfo createInfo{
-		    .codeSize = code.size() * sizeof(char),
-		    .pCode    = reinterpret_cast<const uint32_t *>(code.data())};
-		vk::raii::ShaderModule shaderModule{device, createInfo};
-
-		return shaderModule;
-	}
-
-	// 辅助函数，选择最小图像数量
-	static uint32_t chooseSwapMinImageCount(vk::SurfaceCapabilitiesKHR const &surfaceCapabilities)
-	{
-		auto minImageCount = std::max(3u, surfaceCapabilities.minImageCount);        // 尝试请求至少 3 张图像
-
-		if ((0 < surfaceCapabilities.maxImageCount) && (surfaceCapabilities.maxImageCount < minImageCount))
-		{
-			minImageCount = surfaceCapabilities.maxImageCount;        // 显卡不支持三缓冲，就只能用双缓冲
-		}
-		return minImageCount;
-	}
-
-	// 辅助函数，选择 Surface 格式
-	static vk::SurfaceFormatKHR chooseSwapSurfaceFormat(std::vector<vk::SurfaceFormatKHR> const &availableFormats)
-	{
-		assert(!availableFormats.empty());
-
-		const auto formatIt = std::ranges::find_if(
-		    availableFormats,
-		    [](const auto &format) {
-			    return format.format == vk::Format::eB8G8R8A8Srgb && format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;        // eB8G8R8A8Srgb（GPU 内部） : Shader 输出颜色时 GPU 自动做 x^{1/2.2} 编码，Texture Sampler 采样时 GPU 自动做 x^{2.2} 解码
-		    });                                                                                                                     // eSrgbNonlinear 显示器怎么解释这个显存数据（色域不同）
-
-		return formatIt != availableFormats.end() ? *formatIt : availableFormats[0];
-	}
-
-	// 辅助函数，选择呈现模式
-	static vk::PresentModeKHR chooseSwapPresentMode(const std::vector<vk::PresentModeKHR> &availablePresentModes)
-	{
-		assert(std::ranges::any_of(availablePresentModes, [](auto presentMode) { return presentMode == vk::PresentModeKHR::eFifo; }));
-
-		return std::ranges::any_of(availablePresentModes, [](const vk::PresentModeKHR value) { return vk::PresentModeKHR::eMailbox == value; }) ?
-		           vk::PresentModeKHR::eMailbox :        // 首选 Mailbox
-		           vk::PresentModeKHR::eFifo;            // 垂直同步
-	}
-
-	// 辅助函数，选择 Swap Extent
-	vk::Extent2D chooseSwapExtent(const vk::SurfaceCapabilitiesKHR &capabilities)
-	{
-		if (capabilities.currentExtent.width != 0xFFFFFFFF)        // 驱动是否写死了窗口大小
-		{
-			return capabilities.currentExtent;        // 驱动写死了窗口大小
-		}
-
-		int width, height;
-		glfwGetFramebufferSize(window, &width, &height);        // 询问显示器要渲染的图像大小，由于显示器的缩放，glCreateWindow 的宽高参数会被缩放，缩放后才是真实要渲染的图像大小
-
-		return {// 确保图像分辨率在显卡支持的范围内
-		        std::clamp<uint32_t>(width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
-		        std::clamp<uint32_t>(height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height)};
-	}
-
-	std::vector<const char *> getRequiredExtensions()
-	{
-		uint32_t glfwExtensionCount = 0;
-		auto     glfwExtensions     = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-
-		std::vector extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
-
-		if (enableValidationLayers)
-		{
-			extensions.push_back(vk::EXTDebugUtilsExtensionName);        // 允许注册验证层的回调函数
-		}
-
-		return extensions;
-	}
-
-	static VKAPI_ATTR vk::Bool32 VKAPI_CALL debugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity, vk::DebugUtilsMessageTypeFlagsEXT type, const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData, void *)
-	{
-		if (severity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eError || severity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning)
-		{
-			std::cerr << "validation layer: type" << to_string(type) << " msg: " << pCallbackData->pMessage << std::endl;
-		}
-
-		return vk::False;
-	}
-
-	static std::vector<char> readFile(const std::string &filename)
-	{
-		std::ifstream file(filename, std::ios::ate | std::ios::binary);        // 从文件末尾开始，以二进制格式读取
-		if (!file.is_open())
-		{
-			throw std::runtime_error("failed to open file");
-		}
-		std::vector<char> buffer(file.tellg());                                       // 由于从文件末尾开始读，可以通过当前读指针确定缓冲区大小
-		file.seekg(0, std::ios::beg);                                                 // 回到文件开头
-		file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));        // 读文件所有数据
-		file.close();
-		return buffer;
-	}
 };
+
 
 int main()
 {
