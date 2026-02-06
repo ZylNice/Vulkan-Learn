@@ -1469,8 +1469,6 @@ class MultithreadedApplication
 			throw std::runtime_error("failed to acquire swap chain image!");
 		}
 
-		// device.resetFences(*inFlightFences[frameIndex]);        // 手动将栅栏重置为 Unsignaled 状态（表示当前帧工作处于未完成状态）
-
 		uint64_t computeWaitValue    = timelineValue;             // Compute 等待上一帧 Graphics 结束的值
 		uint64_t computeSignalValue  = ++timelineValue;           // Compute 完成后 Signal 的值
 		uint64_t graphicsWaitValue   = computeSignalValue;        // Graphics 等待 Compute 完成
