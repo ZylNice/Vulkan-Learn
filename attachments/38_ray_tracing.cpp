@@ -919,7 +919,7 @@ class HelloTriangleApplication
 		    .mipLevels   = mipLevels,                          // MIP 级数
 		    .arrayLayers = 1,                                  // 数组层数
 		    .samples     = vk::SampleCountFlagBits::e1,        // MSAA 采样数
-		    .tiling      = tiling,                             // 内存排列（eLinear：行主序排列，CPU 可读写，GPU 性能差）（eOptimal：GPU 优化排列，CPU 无法读写，GPU 性能最佳）(图像创建后不可更改）
+		    .tiling      = tiling,                             // 内存排列（eLinear：行主序排列，CPU 可读写，GPU 性能差）（eOptimal：GPU 分块优化排列，CPU 无法读写，GPU 性能最佳）(图像创建后不可更改）
 		    .usage       = usage,                              // 图像用途
 		    .sharingMode = vk::SharingMode::eExclusive         // 队列族共享模式
 		};
