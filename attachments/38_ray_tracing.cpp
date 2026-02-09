@@ -870,216 +870,69 @@ class HelloTriangleApplication
 		transitionImageLayout(textureImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);        // 适合 Shader 采样
 	}
 
-	// 生成 Mipmap
-	void generateMipmaps(vk::raii::Image &image, vk::Format imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels)
+	// 创建纹理视图
+	vk::raii::ImageView createTextureImageView(vk::raii::Image &textureImage)
 	{
-		// 向 GPU 查询，对于这种图像格式，在使用 GPU 优化排布时，是否支持线性过滤
-		vk::FormatProperties formatProperties = physicalDevice.getFormatProperties(imageFormat);
-		if (!(formatProperties.optimalTilingFeatures & vk::FormatFeatureFlagBits::eSampledImageFilterLinear))
-		{
-			throw std::runtime_error("texture image format does not support linear blitting!");
-		}
-
-		std::unique_ptr<vk::raii::CommandBuffer> commandBuffer = beginSingleTimeCommands();
-
-		vk::ImageMemoryBarrier barrier = {
-		    .srcAccessMask       = vk::AccessFlagBits::eTransferWrite,
-		    .dstAccessMask       = vk::AccessFlagBits::eTransferRead,
-		    .oldLayout           = vk::ImageLayout::eTransferDstOptimal,
-		    .newLayout           = vk::ImageLayout::eTransferSrcOptimal,
-		    .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
-		    .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
-		    .image               = image};
-		barrier.subresourceRange.aspectMask     = vk::ImageAspectFlagBits::eColor;        // 仅针对颜色分量
-		barrier.subresourceRange.baseArrayLayer = 0;
-		barrier.subresourceRange.layerCount     = 1;
-		barrier.subresourceRange.levelCount     = 1;        // 每次只处理一个 Mip Level
-
-		int32_t mipWidth  = texWidth;
-		int32_t mipHeight = texHeight;
-
-		// 循环生成每一级 Mipmap (i=1 到 mipLevels-1)
-		for (uint32_t i = 1; i < mipLevels; i++)
-		{
-			// 将上一级 mipmap 从传输目标转换为传输源，供 Blit 操作读取
-			barrier.subresourceRange.baseMipLevel = i - 1;
-			barrier.oldLayout                     = vk::ImageLayout::eTransferDstOptimal;
-			barrier.newLayout                     = vk::ImageLayout::eTransferSrcOptimal;
-			barrier.srcAccessMask                 = vk::AccessFlagBits::eTransferWrite;
-			barrier.dstAccessMask                 = vk::AccessFlagBits::eTransferRead;
-
-			// 提交管线屏障
-			commandBuffer->pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-			                               vk::PipelineStageFlagBits::eTransfer,
-			                               {},            // dependencyFlags (依赖标志位，默认全局依赖，即区域级同步，不是像素级同步）
-			                               {},            // memoryBarriers (全局内存屏障，屏障执行前，所有内存写入必须完成，且对屏障执行后的所有读取可见)
-			                               {},            // bufferMemoryBarriers (缓冲区内存屏障)
-			                               barrier        // 图像内存屏障
-			);
-
-			// 计算源区域和目标区域的坐标偏移量
-			vk::ArrayWrapper1D<vk::Offset3D, 2> offsets, dstOffsets;
-			offsets[0]    = vk::Offset3D(0, 0, 0);
-			offsets[1]    = vk::Offset3D(mipWidth, mipHeight, 1);
-			dstOffsets[0] = vk::Offset3D(0, 0, 0);
-			dstOffsets[1] = vk::Offset3D(mipWidth > 1 ? mipWidth / 2 : 1, mipHeight > 1 ? mipHeight / 2 : 1, 1);
-
-			// 设置 Blit 参数
-			vk::ImageBlit blit  = {.srcSubresource = {}, .srcOffsets = offsets, .dstSubresource = {}, .dstOffsets = dstOffsets};
-			blit.srcSubresource = vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, i - 1, 0, 1);        // 源 Mipmap 层级（i-1），起始数组层索引，数组层数量
-			blit.dstSubresource = vk::ImageSubresourceLayers(vk::ImageAspectFlagBits::eColor, i, 0, 1);            // 目标 Mipmap 层级（i）
-
-			// 执行位块传输
-			commandBuffer->blitImage(image,        // 此处 image 既是源，也是目标
-			                         vk::ImageLayout::eTransferSrcOptimal,
-			                         image,
-			                         vk::ImageLayout::eTransferDstOptimal,
-			                         {blit},
-			                         vk::Filter::eLinear        // 当源图和目标图尺寸不同时，用线性插值计算新像素的颜色
-			);
-
-			// 对完成传输操作的上一级源图像，做图像布局转换，供 Shader 采样
-			barrier.oldLayout     = vk::ImageLayout::eTransferSrcOptimal;
-			barrier.newLayout     = vk::ImageLayout::eShaderReadOnlyOptimal;
-			barrier.srcAccessMask = vk::AccessFlagBits::eTransferRead;
-			barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;
-
-			commandBuffer->pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-			                               vk::PipelineStageFlagBits::eFragmentShader,
-			                               {}, {}, {}, barrier);
-			// 更新下一轮循环的尺寸
-			if (mipWidth > 1)
-				mipWidth /= 2;
-			if (mipHeight > 1)
-				mipHeight /= 2;
-		}
-		// 对最后一层 Mipmap 图像，做图像布局转换，供 Shader 采样
-		barrier.subresourceRange.baseMipLevel = mipLevels - 1;
-		barrier.oldLayout                     = vk::ImageLayout::eTransferDstOptimal;
-		barrier.newLayout                     = vk::ImageLayout::eShaderReadOnlyOptimal;
-		barrier.srcAccessMask                 = vk::AccessFlagBits::eTransferWrite;
-		barrier.dstAccessMask                 = vk::AccessFlagBits::eShaderRead;
-
-		commandBuffer->pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
-		                               vk::PipelineStageFlagBits::eFragmentShader,
-		                               {}, {}, {}, barrier);
-		endSingleTimeCommands(*commandBuffer);
+		return createImageView(textureImage, vk::Format::eR8G8B8A8Srgb, vk::ImageAspectFlagBits::eColor);        // shader 通过 ImageView 访问 Image
 	}
 
-	vk::SampleCountFlagBits getMaxUsableSampleCount()
-	{
-		vk::PhysicalDeviceProperties physicalDeviceProperties = physicalDevice.getProperties();
-
-		vk::SampleCountFlags counts = physicalDeviceProperties.limits.framebufferColorSampleCounts &        // 我们必须选择一个颜色和深度都支持的采样数
-		                              physicalDeviceProperties.limits.framebufferDepthSampleCounts;
-
-		if (counts & vk::SampleCountFlagBits::e64)
-		{
-			return vk::SampleCountFlagBits::e64;
-		}
-		if (counts & vk::SampleCountFlagBits::e32)
-		{
-			return vk::SampleCountFlagBits::e32;
-		}
-		if (counts & vk::SampleCountFlagBits::e16)
-		{
-			return vk::SampleCountFlagBits::e16;
-		}
-		if (counts & vk::SampleCountFlagBits::e8)
-		{
-			return vk::SampleCountFlagBits::e8;
-		}
-		if (counts & vk::SampleCountFlagBits::e4)
-		{
-			return vk::SampleCountFlagBits::e4;
-		}
-		if (counts & vk::SampleCountFlagBits::e2)
-		{
-			return vk::SampleCountFlagBits::e2;
-		}
-
-		return vk::SampleCountFlagBits::e1;
-	}
-
-	void createTextureImageView()
-	{
-		textureImageView = createImageView(textureImage, vk::Format::eR8G8B8A8Srgb, vk::ImageAspectFlagBits::eColor, mipLevels);        // 创建纹理图像的视图（着色器必须通过 ImageView 来访问 Image
-	}
-
+	// 创建纹理采样器
 	void createTextureSampler()
 	{
 		vk::PhysicalDeviceProperties properties = physicalDevice.getProperties();        // 获取物理设备属性
 
 		vk::SamplerCreateInfo samplerInfo{
-		    .magFilter        = vk::Filter::eLinear,                           // 纹理放大过滤器，线性插值（一个纹理像素覆盖多个屏幕像素）
-		    .minFilter        = vk::Filter::eLinear,                           // 纹理缩小过滤器，线性插值（一个屏幕像素覆盖多个纹理像素）
-		    .mipmapMode       = vk::SamplerMipmapMode::eLinear,                // Mipmap 模式（如何在不同的 Mipmap 层级之间插值）
-		    .addressModeU     = vk::SamplerAddressMode::eRepeat,               // U 轴超出范围时，重复纹理（平铺，从头开始重复，类似铺地砖）
-		    .addressModeV     = vk::SamplerAddressMode::eRepeat,               // V 轴超出范围时，重复纹理
-		    .addressModeW     = vk::SamplerAddressMode::eRepeat,               // W 轴超出范围时，重复纹理
-		    .mipLodBias       = 0.0f,                                          // Mipmap 级别偏移量
-		    .anisotropyEnable = vk::True,                                      // 启用各项异性过滤（解决倾斜观察时的模糊问题）（纹理根据长轴来决定 mipmap 层级，短轴使用的 mipmap 级别过高导致模糊）(如果用短轴来决定 mipmap 会有更严重的闪烁）
-		    .maxAnisotropy    = properties.limits.maxSamplerAnisotropy,        // 使用设备支持的最大各项异性级别
-		    .compareEnable    = vk::False,                                     // 禁用比较操作（说明这不是阴影贴图)
+		    .magFilter        = vk::Filter::eLinear,                           // 放大过滤器（纹理像素 > 屏幕像素）（线性插值）
+		    .minFilter        = vk::Filter::eLinear,                           // 缩小过滤器（纹理像素 < 屏幕像素）（线性插值）
+		    .mipmapMode       = vk::SamplerMipmapMode::eLinear,                // Mipmap 模式（Mipmap 之间，线性插值）
+		    .addressModeU     = vk::SamplerAddressMode::eRepeat,               // U 轴（重复）（UV 超出 [0,1] 时，重复纹理）
+		    .addressModeV     = vk::SamplerAddressMode::eRepeat,               // V 轴（重复）
+		    .addressModeW     = vk::SamplerAddressMode::eRepeat,               // W 轴（重复）
+		    .mipLodBias       = 0.0f,                                          // Mipmap 偏移量（正值->模糊，负值->清晰）
+		    .anisotropyEnable = vk::True,                                      // 各向异性过滤（短轴决定 Mipmap，沿长轴采样多个正方形 Mipmap）（解决倾斜观察时的模糊问题）（若长轴决定 mipmap，则短轴使用的 mipmap 级别过高导致模糊）(若短轴决定 mipmap，则有严重闪烁）
+		    .maxAnisotropy    = properties.limits.maxSamplerAnisotropy,        // 各向异性采样最大样本数
+		    .compareEnable    = vk::False,                                     // 比较操作（禁用，仅阴影贴图需要)
 		    .compareOp        = vk::CompareOp::eAlways,
-		    .minLod           = 0.0f,                   // 允许使用的最清晰的 Mipmap 层级（0）
-		    .maxLod           = vk::LodClampNone        // 允许使用的最模糊的 Mipmap 层级（无限制）
+		    .minLod           = 0.0f,                   // 最小 Mipmap 限制（最清晰 Mipmap，0）
+		    .maxLod           = vk::LodClampNone        // 最大 Mipmap 限制（最模糊 Mipmap，无限制）
 		};
 
 		textureSampler = vk::raii::Sampler(device, samplerInfo);
 	}
 
-	// 辅助函数，创建 ImageView（描述如何访问 Image）
-	vk::raii::ImageView createImageView(vk::raii::Image &image, vk::Format format, vk::ImageAspectFlagBits aspectFlags, uint32_t mipLevels) const
+	// 辅助函数：创建图像视图
+	vk::raii::ImageView createImageView(vk::raii::Image &image, vk::Format format, vk::ImageAspectFlagBits aspectFlags) const
 	{
-		vk::ImageViewCreateInfo viewInfo{
-		    .image            = image,                         // 要为哪个 Image 对象创建视图
-		    .viewType         = vk::ImageViewType::e2D,        // 告诉 GPU 将此数据视为 2D 纹理
-		    .format           = format,                        // 指定数据的解释方式（通常与 Image 格式一致）（自动 Gamma 校正）（D32_SFLOAT_S8_UINT 格式下，需要对深度与模板缓冲做格式分离，一个是浮点，一个是 UINT 格式）
-		    .subresourceRange = {
-		        // 视图可以看到图像的哪些部分
-		        aspectFlags,        // 可以访问的分量
-		        0,                  // mipmap 层级，从 0 开始
-		        mipLevels,          //
-		        0,                  // 数组层级， 从 0 开始，共 1 层
-		        1,
-		    }};
+		vk::ImageViewCreateInfo viewInfo{.image = image, .viewType = vk::ImageViewType::e2D, .format = format,        // 图像，视图类型，解释格式（通常与 Image 一致，但深度模板纹理有两种格式，深度浮点，模板 UINT）
+		                                 .subresourceRange = {aspectFlags, 0, 1, 0, 1}};                              // 访问层面，mipmap 起始+长度，数组起始+长度
 		return vk::raii::ImageView(device, viewInfo);
 	}
 
-	// 辅助函数，创建 Image（分配显存并绑定）
-	void createImage(uint32_t                width,              // 图像宽度
-	                 uint32_t                height,             // 图像高度
-	                 uint32_t                mipLevels,          // Mipmap 层级数
-	                 vk::SampleCountFlagBits numSamples,         //
-	                 vk::Format              format,             // 图像格式
-	                 vk::ImageTiling         tiling,             // 图像数据的内存排列模式（ImageTiling 在图像创建后不可更改，ImageLayout 在图像创建后可更改）
-	                 vk::ImageUsageFlags     usage,              // 图像的用途标志位
-	                 vk::MemoryPropertyFlags properties,         // 所需的内存属性
-	                 vk::raii::Image        &image,              // 图像对象（传出参数）
-	                 vk::raii::DeviceMemory &imageMemory)        // 图像显存对象（传出参数）
+	// 辅助函数：创建图像
+	void createImage(uint32_t width, uint32_t height, uint32_t mipLevels, vk::Format format, vk::ImageTiling tiling,                                    // 宽，高，Mipmap 数，格式，内存排列
+	                 vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties, vk::raii::Image &image, vk::raii::DeviceMemory &imageMemory)        // 用途，内存属性，传出参数（图像+内存）
 	{
 		vk::ImageCreateInfo imageInfo{
-		    .imageType   = vk::ImageType::e2D,                // 图像类型，1D/2D/3D
-		    .format      = format,                            // 像素格式，指定颜色通道的排列和大小
-		    .extent      = {width, height, 1},                // 图像范围（宽，高，深），2D 图像的深度是 1
-		    .mipLevels   = mipLevels,                         // MIP 贴图级别数量
-		    .arrayLayers = 1,                                 // 纹理数组层数，这里 1 表示不是纹理数组
-		    .samples     = numSamples,                        // 多重采样的采样数
-		    .tiling      = tiling,                            // 内存平铺模式，（eLinear：线性排列，CPU 可直接读取，但在 GPU 上性能差）（eOptimal：硬件特定的优化排列，GPU 性能最佳，但 CPU 无法直接读取）
-		    .usage       = usage,                             // 纹理的用途标志
-		    .sharingMode = vk::SharingMode::eExclusive        // 队列族共享模式
+		    .imageType   = vk::ImageType::e2D,                 // 图像类型（1D/2D/3D）
+		    .format      = format,                             // 像素格式（颜色通道的排列、大小、数据类型）
+		    .extent      = {width, height, 1},                 // 图像尺寸（宽，高，深）（2D 图深度为 1）
+		    .mipLevels   = mipLevels,                          // MIP 级数
+		    .arrayLayers = 1,                                  // 数组层数
+		    .samples     = vk::SampleCountFlagBits::e1,        // MSAA 采样数
+		    .tiling      = tiling,                             // 内存排列（eLinear：行主序排列，CPU 可读写，GPU 性能差）（eOptimal：GPU 优化排列，CPU 无法读写，GPU 性能最佳）(图像创建后不可更改）
+		    .usage       = usage,                              // 图像用途
+		    .sharingMode = vk::SharingMode::eExclusive         // 队列族共享模式
 		};
 
 		image = vk::raii::Image(device, imageInfo);        // 创建图像句柄
 
+		// 分配内存
 		vk::MemoryRequirements memRequirements = image.getMemoryRequirements();
-		vk::MemoryAllocateInfo allocInfo{
-		    .allocationSize  = memRequirements.size,
-		    .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)};
-		imageMemory = vk::raii::DeviceMemory(device, allocInfo);        // 分配内存
+		vk::MemoryAllocateInfo allocInfo{.allocationSize  = memRequirements.size,
+		                                 .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)};
+		imageMemory = vk::raii::DeviceMemory(device, allocInfo);
 
-		image.bindMemory(imageMemory, 0);        // 绑定实际显存，偏移量为 0
+		image.bindMemory(imageMemory, 0);        // 图像句柄绑定内存（从该内存的 0 字节开始绑定）
 	}
 
 	// 辅助函数，图像布局转换（预处理阶段的屏障）

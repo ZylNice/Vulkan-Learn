@@ -707,7 +707,7 @@ class HelloTriangleApplication
 		generateMipmaps(textureImage, vk::Format::eR8G8B8A8Srgb, texWidth, texHeight, mipLevels);
 	}
 
-	// 生成 Mipmap
+	// 生成 Mipmap（图像布局转换 -> Blit -> 图像布局转换）
 	void generateMipmaps(vk::raii::Image &image, vk::Format imageFormat, int32_t texWidth, int32_t texHeight, uint32_t mipLevels)
 	{
 		// 向 GPU 查询，对于这种图像格式，在使用 GPU 优化排布时，是否支持线性过滤
