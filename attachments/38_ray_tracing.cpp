@@ -935,117 +935,98 @@ class HelloTriangleApplication
 		image.bindMemory(imageMemory, 0);        // 图像句柄绑定内存（从该内存的 0 字节开始绑定）
 	}
 
-	// 辅助函数，图像布局转换（预处理阶段的屏障）
-	void transitionImageLayout(const vk::raii::Image &image,            // 需要转换布局的图像
-	                           vk::ImageLayout        oldLayout,        // 图像当前布局（图像创建时，按占用内存最大的无压缩布局分配内存，运行时通常采用压缩布局以节省显存带宽，图像布局的转换不会改变图像分配的实际内存大小，只会改变有效数据的大小）
-	                           vk::ImageLayout        newLayout,        // 图像将要转换的布局
-	                           uint32_t               mipLevels)
+	// 辅助函数：图像布局转换（预处理阶段）
+	void transitionImageLayout(const vk::raii::Image &image, vk::ImageLayout oldLayout, vk::ImageLayout newLayout)        // 图像，原布局，目标布局（按可能布局中，内存最大的分配内存）(布局转换改变有效内存大小，物理内存不变）
 	{
-		auto commandBuffer = beginSingleTimeCommands();        // 分配一个一次性的命令缓冲
+		auto commandBuffer = beginSingleTimeCommands();        // 一次性命令缓冲
 
 		vk::ImageMemoryBarrier barrier{
-		    .oldLayout           = oldLayout,
-		    .newLayout           = newLayout,
-		    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,        // 表示不涉及跨队列族的所有权转移
-		    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-		    .image               = image,        // 受影响的图像
-		    .subresourceRange    = {
-                // 指定屏障影响图像的哪些部分
-		           .aspectMask     = vk::ImageAspectFlagBits::eColor,        // 仅影响颜色分量
-		           .baseMipLevel   = 0,                                      // 从第 0 层 Mipmap 开始
-		           .levelCount     = mipLevels,                              //
-		           .baseArrayLayer = 0,                                      // 从第 0 层数组层开始
-		           .layerCount     = 1                                       // 仅影响 1 层数组层
-            }};
+		    .oldLayout = oldLayout, .newLayout = newLayout, .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED, .image = image,        // 原布局，目标布局，原队列族，目标队列族，图像（这里无队列族所有权转移）
+		    .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1}};                        // 同步范围（层面，mipmap，数组）
 
 		vk::PipelineStageFlags sourceStage;             // 屏障执行前，必须完成的阶段（生产者）(屏障之中，是图像布局转换操作）
 		vk::PipelineStageFlags destinationStage;        // 屏障执行后，才能开始的阶段（消费者）
 
-		// 执行依赖必须有，内存依赖可以没有，内存依赖挂载于执行依赖
 		if (oldLayout == vk::ImageLayout::eUndefined && newLayout == vk::ImageLayout::eTransferDstOptimal)
 		{
-			// 内存依赖
-			barrier.srcAccessMask = {};                                        // 屏障执行前，sourceStage 中的 srcAccessMask 操作必须可见（因为此情况下屏障的执行不在乎旧数据，所以无需等待 sourceStage 的任何 L1 缓存刷入 L2）
-			barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;        // destinationStage 中的 dstAccessMask 操作执行前，屏障执行结果必须可见（保证传输写入操作可以安全进行，通过元数据缓存失效实现）
+			// 内存依赖（挂载于执行依赖，可以没有）
+			barrier.srcAccessMask = {};                                        // 屏障执行前，sourceStage 中的 srcAccessMask 操作必须对屏障可见（从 L1 刷入 L2）（eUndefined 无需同步旧数据）
+			barrier.dstAccessMask = vk::AccessFlagBits::eTransferWrite;        // destinationStage 中的 dstAccessMask 操作执行前，屏障执行结果必须可见（元数据缓存失效）
 
-			// 执行依赖
-			sourceStage      = vk::PipelineStageFlagBits::eTopOfPipe;        // 管线起点就能立马执行屏障
-			destinationStage = vk::PipelineStageFlagBits::eTransfer;         // 屏障执行后，才能开始传输拷贝阶段
+			// 执行依赖（必须有）
+			sourceStage      = vk::PipelineStageFlagBits::eTopOfPipe;        // 管线顶端（不等待）
+			destinationStage = vk::PipelineStageFlagBits::eTransfer;         // 传输阶段
 		}
 		else if (oldLayout == vk::ImageLayout::eTransferDstOptimal && newLayout == vk::ImageLayout::eShaderReadOnlyOptimal)
 		{
 			barrier.srcAccessMask = vk::AccessFlagBits::eTransferWrite;        // 屏障执行前，传输写入操作必须可见
 			barrier.dstAccessMask = vk::AccessFlagBits::eShaderRead;           // Shader 读取前，屏障执行结果必须可见
 
-			sourceStage      = vk::PipelineStageFlagBits::eTransfer;              // 屏障执行前，传输阶段必须完成
-			destinationStage = vk::PipelineStageFlagBits::eFragmentShader;        // 屏障执行后，片段着色器才能开始执行
+			sourceStage      = vk::PipelineStageFlagBits::eTransfer;              // 传输阶段
+			destinationStage = vk::PipelineStageFlagBits::eFragmentShader;        // 片段着色器阶段
 		}
 		else
 		{
 			throw std::invalid_argument("unsupported layout transition!");
 		}
 
-		commandBuffer->pipelineBarrier(
-		    sourceStage,
-		    destinationStage,
-		    {},
-		    {},
-		    nullptr,
-		    barrier);
+		commandBuffer->pipelineBarrier(sourceStage, destinationStage,        // 源阶段，目标阶段
+		                               {},                                   // 依赖标志（eByRegion（局部依赖）: 移动端分块渲染 + 片上缓存优化）（空（全局依赖）: 下一阶段必须等待上一阶段处理完所有像素）
+		                               {},                                   // 全局内存屏障（屏障无执行操作，会同步所有满足要求的内存）
+		                               nullptr, barrier);                    // 缓冲区内存屏障，图像内存屏障（屏障有执行操作，同步指定内存）
 
-		endSingleTimeCommands(*commandBuffer);        // 结束录制并提交命令缓冲
+		endSingleTimeCommands(*commandBuffer);        // 结束录制，提交命令缓冲
 	}
 
-	// 辅助函数，从 Buffer 拷贝到 Image
-	void copyBufferToImage(const vk::raii::Buffer &buffer,        // 源数据缓冲
-	                       vk::raii::Image        &image,         // 目标图像对象
-	                       uint32_t                width,         // 图像宽度
-	                       uint32_t                height         // 图像高度
-	)
+	// 辅助函数：缓冲区拷贝到图像
+	void copyBufferToImage(const vk::raii::Buffer &buffer, vk::raii::Image &image, uint32_t width, uint32_t height)        // 缓冲区，图像，宽，高
 	{
-		std::unique_ptr<vk::raii::CommandBuffer> commandBuffer = beginSingleTimeCommands();        // beginSingleTimeCommands 用于执行那些不需要每帧都重复的短指令
+		std::unique_ptr<vk::raii::CommandBuffer> commandBuffer = beginSingleTimeCommands();        // 一次性命令缓冲
 
 		vk::BufferImageCopy region{
-		    .bufferOffset      = 0,        // 缓冲区的起始字节偏移量
-		    .bufferRowLength   = 0,        // 缓冲区中数据的行长（以像素为单位）（设置为 0 表示数据紧密排列，即行长等于 imageExtent.width ，若因对齐内存而有空隙，则需显式指定真实值）
-		    .bufferImageHeight = 0,        // 缓冲区中图像的高度（以像素为单位）（设置为 0 表示数据紧密排列，即高度等于 imageExtent.height，若因对齐内存而有空隙，则需显式指定真实值）
-		    .imageSubresource  = {
-                // 指定要拷贝到的图像子资源
-		         .aspectMask     = vk::ImageAspectFlagBits::eColor,        // 拷贝到图像的哪些通道
-		         .mipLevel       = 0,                                      // 拷贝到 0 级 Mipmap
-		         .baseArrayLayer = 0,                                      // 纹理数组的起始索引（纹理数组）
-		         .layerCount     = 1,                                      // 要拷贝的层数（纹理数组）
-            },
-		    .imageOffset = {0, 0, 0},                // 图像中的拷贝起始坐标 (x, y, z)
-		    .imageExtent = {width, height, 1}        // 图像中的拷贝尺寸 (宽, 高, 深)
+		    // 源区域
+		    .bufferOffset      = 0,        // 偏移量
+		    .bufferRowLength   = 0,        // 行长（像素单位）（0 表示像素紧密排列，无空隙）
+		    .bufferImageHeight = 0,        // 高度
+		    // 目标区域
+		    .imageSubresource = {.aspectMask = vk::ImageAspectFlagBits::eColor, .mipLevel = 0, .baseArrayLayer = 0, .layerCount = 1},        // 层面，0 级 Mipmap，数组
+		    .imageOffset      = {0, 0, 0},                                                                                                   // 起始坐标 (x, y, z)
+		    .imageExtent      = {width, height, 1}                                                                                           // 图像尺寸 (宽, 高, 深)
 		};
+		commandBuffer->copyBufferToImage(*buffer, *image, vk::ImageLayout::eTransferDstOptimal, {region});        // 缓冲区，图像，图像当前布局，拷贝区域
 
-		commandBuffer->copyBufferToImage(
-		    *buffer,                                     // 源缓冲区
-		    *image,                                      // 目标图像
-		    vk::ImageLayout::eTransferDstOptimal,        // 图像当前的布局（必须匹配）
-		    {region}                                     // 拷贝区域列表（可以一次拷贝多个区域）
-		);
 		endSingleTimeCommands(*commandBuffer);
 	}
 
 	// 加载模型（.obj）
 	void loadModel()
 	{
-		tinyobj::attrib_t                attrib;           // 存储所有顶点的位置、法线、纹理坐标等属性数据（OBJ 文件保证"零件"层面的去重）
-		std::vector<tinyobj::shape_t>    shapes;           // 模型里的对象列表
-		std::vector<tinyobj::material_t> materials;        // 材质信息
-		std::string                      warn, err;        // 警告信息/错误信息
+		tinyobj::attrib_t                attrib;                // 顶点属性（OBJ 保证顶点属性去重）
+		std::vector<tinyobj::shape_t>    shapes;                // 子网格
+		std::vector<tinyobj::material_t> localMaterials;        // 材质
+		std::string                      warn, err;             // 警告/错误信息
 
-		if (!tinyobj::LoadObj(&attrib, &shapes, &materials, &warn, &err, MODEL_PATH.c_str()))
+		if (!tinyobj::LoadObj(&attrib, &shapes, &localMaterials, &warn, &err, MODEL_PATH.c_str()))
 		{
 			throw std::runtime_error(warn + err);
 		}
 
+		size_t materialOffset  = materials.size();
+		size_t oldTextureCount = textureImageViews.size();
+
+		materials.insert(materials.end(), localMaterials.begin(), localMaterials.end());        // 新加载材质添加到全局材质列表
+
 		std::unordered_map<Vertex, uint32_t> uniqueVertices{};
+
+		uint32_t indexOffset = 0;        // 已处理的索引总数
 
 		for (const auto &shape : shapes)
 		{
+			std::cout << "Loading mesh: " << shape.name << ": " << shape.mesh.indices.size() / 3 << " triangles\n";
+
+			uint32_t startOffset = indexOffset;        // 当前子网格在索引缓冲区的起始偏移量
+			uint32_t localMaxV   = 0;                  // 当前子网格引用的最大顶点索引
+
 			for (const auto &index : shape.mesh.indices)
 			{
 				Vertex vertex{};
@@ -1057,17 +1038,25 @@ class HelloTriangleApplication
 
 				vertex.texCoord = {
 				    attrib.texcoords[2 * index.texcoord_index + 0],
-				    1.0f - attrib.texcoords[2 * index.texcoord_index + 1]};        // Vulkan、OpenGL 纹理坐标原点在左上角
+				    1.0f - attrib.texcoords[2 * index.texcoord_index + 1]};        // Vulkan/OpenGL UV 坐标原点在左上角，OBJ 格式在左下角
 
 				vertex.color = {1.0f, 1.0f, 1.0f};
 
-				if (!uniqueVertices.contains(vertex))        // 共用顶点去重（非共用顶点不会被去重)
+				if (index.normal_index >= 0)
 				{
-					uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());        // 记录该顶点在实际缓冲区中的索引
+					vertex.normal = {
+					    attrib.normals[3 * index.normal_index + 0],
+					    attrib.normals[3 * index.normal_index + 1],
+					    attrib.normals[3 * index.normal_index + 2]};
+				}
+
+				if (!uniqueVertices.contains(vertex))        // 顶点去重（共用顶点被去重)
+				{
+					uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());        // 顶点索引
 					vertices.push_back(vertex);
 				}
 
-				indices.push_back(uniqueVertices[vertex]);        // 将实际索引，加入顶点缓冲区
+				indices.push_back(uniqueVertices[vertex]);        // 将顶点索引，加入索引缓冲区
 			}
 		}
 	}
