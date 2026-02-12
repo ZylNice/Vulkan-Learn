@@ -31,7 +31,7 @@ import vulkan_hpp;
 #include <tiny_obj_loader.h>
 
 #ifndef LAB_TASK_LEVEL
-#	define LAB_TASK_LEVEL 1
+#	define LAB_TASK_LEVEL 11
 #endif
 
 #define LAB_TASK_AS_BUILD_AND_BIND 4        // 绑定和构建加速结构
@@ -162,7 +162,7 @@ class HelloTriangleApplication
 
 	// 纹理资源
 	std::vector<vk::raii::Image>        textureImages;                   // 纹理图像句柄（Vulkan 规定，对于 Image，GPU 一定可见，CPU 一般不可见）（仅当图像为线性平铺时，CPU 才可见）
-	std::vector<vk::raii::DeviceMemory> textureImageMemorys;             // 内存（图像）
+	std::vector<vk::raii::DeviceMemory> textureImageMemories;            // 内存（图像）
 	std::vector<vk::raii::ImageView>    textureImageViews;               // 图像视图
 	vk::raii::Sampler                   textureSampler = nullptr;        // 采样器
 
@@ -194,14 +194,14 @@ class HelloTriangleApplication
 	vk::raii::AccelerationStructureKHR tlas              = nullptr;
 
 	// 实例查找表
-	struct InstanceUT        // （用于在 Shader 中根据实例 ID 找到材质 ID）
+	struct InstanceLUT        // （用于在 Shader 中根据实例 ID 找到材质 ID）
 	{
 		uint32_t materialID;
 		uint32_t indexBufferOffset;
 	};
-	std::vector<InstanceUT> instanceLUTs;
-	vk::raii::Buffer        instanceLUTBuffer       = nullptr;
-	vk::raii::DeviceMemory  instanceLUTBufferMemory = nullptr;
+	std::vector<InstanceLUT> instanceLUTs;
+	vk::raii::Buffer         instanceLUTBuffer       = nullptr;
+	vk::raii::DeviceMemory   instanceLUTBufferMemory = nullptr;
 
 	// UBO
 	UniformBufferObject                 ubo{};
@@ -1011,22 +1011,24 @@ class HelloTriangleApplication
 			throw std::runtime_error(warn + err);
 		}
 
-		size_t materialOffset  = materials.size();
+		size_t materialOffset  = materials.size();        // 全局材质偏移量
 		size_t oldTextureCount = textureImageViews.size();
 
-		materials.insert(materials.end(), localMaterials.begin(), localMaterials.end());        // 新加载材质添加到全局材质列表
+		materials.insert(materials.end(), localMaterials.begin(), localMaterials.end());        // 将新加载材质添加到全局材质列表
 
 		std::unordered_map<Vertex, uint32_t> uniqueVertices{};
 
 		uint32_t indexOffset = 0;        // 已处理的索引总数
 
+		// 遍历子网格
 		for (const auto &shape : shapes)
 		{
 			std::cout << "Loading mesh: " << shape.name << ": " << shape.mesh.indices.size() / 3 << " triangles\n";
 
-			uint32_t startOffset = indexOffset;        // 当前子网格在索引缓冲区的起始偏移量
-			uint32_t localMaxV   = 0;                  // 当前子网格引用的最大顶点索引
+			uint32_t startOffset = indexOffset;        // 子网格在索引缓冲区的起始偏移量
+			uint32_t localMaxV   = 0;                  // 子网格引用的最大顶点索引
 
+			// 子网格顶点
 			for (const auto &index : shape.mesh.indices)
 			{
 				Vertex vertex{};
@@ -1038,7 +1040,7 @@ class HelloTriangleApplication
 
 				vertex.texCoord = {
 				    attrib.texcoords[2 * index.texcoord_index + 0],
-				    1.0f - attrib.texcoords[2 * index.texcoord_index + 1]};        // Vulkan/OpenGL UV 坐标原点在左上角，OBJ 格式在左下角
+				    1.0f - attrib.texcoords[2 * index.texcoord_index + 1]};        // Vulkan UV 坐标原点在左上角，OBJ/OpenGL 在左下角
 
 				vertex.color = {1.0f, 1.0f, 1.0f};
 
@@ -1052,11 +1054,55 @@ class HelloTriangleApplication
 
 				if (!uniqueVertices.contains(vertex))        // 顶点去重（共用顶点被去重)
 				{
-					uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());        // 顶点索引
+					uniqueVertices[vertex] = static_cast<uint32_t>(vertices.size());        // 记录顶点索引
 					vertices.push_back(vertex);
 				}
 
 				indices.push_back(uniqueVertices[vertex]);        // 将顶点索引，加入索引缓冲区
+				indexOffset++;
+
+				uint32_t vi = uniqueVertices[vertex];
+				localMaxV   = std::max(localMaxV, vi);        // 更新子网格最大顶点索引
+			}
+
+			// 子网格材质
+			int localMaterialID  = shape.mesh.material_ids.empty() ? -1 : shape.mesh.material_ids[0];                      // OBJ 中的材质 ID（material_ids 长度 == 子网格面数）（这里假设，子网格与材质一比一）
+			int globalMaterialID = (localMaterialID < 0) ? -1 : static_cast<int>(materialOffset + localMaterialID);        // 全局材质 ID
+
+			uint32_t indexCount = indexOffset - startOffset;        // 当前子网格索引总数
+
+			bool alphaCut   = (shape.name.find("nettle_plant") != std::string::npos);        // alpha 裁剪（开关）（子串匹配）
+			bool reflective = (shape.name.find("table") != std::string::npos);               // 反射（开关）
+
+			submeshes.push_back({
+			    .indexOffset = startOffset,             // 起始索引
+			    .indexCount  = indexCount,              // 索引总数
+			    .materialID  = globalMaterialID,        // 全局材质 ID
+			    .firstVertex = 0u,                      // 顶点起始偏移（无）
+			    .maxVertex   = localMaxV + 1,
+			    .alphaCut    = alphaCut,         // alpha 裁剪
+			    .reflective  = reflective        // 反射
+			});
+		}
+
+		// 遍历材质
+		for (size_t i = 0; i < localMaterials.size(); i++)
+		{
+			const auto &material = localMaterials[i];
+
+			// 加载漫反射纹理
+			if (!material.diffuse_texname.empty())
+			{
+				std::string texturePath = MODEL_PATH.substr(0, MODEL_PATH.find_last_of("/\\")) + "/" + material.diffuse_texname;        // 拼接纹理路径
+				auto [img, mem]         = createTextureImage(texturePath);                                                              // 创建纹理
+				textureImages.push_back(std::move(img));
+				textureImageMemories.push_back(std::move(mem));
+				textureImageViews.emplace_back(createTextureImageView(textureImages.back()));        // 创建纹理视图
+			}
+			else
+			{
+				// 无漫反射纹理
+				std::cout << "No Texture for material: " << material.name << std::endl;
 			}
 		}
 	}
@@ -1064,85 +1110,231 @@ class HelloTriangleApplication
 	// 创建顶点缓冲区
 	void createVertexBuffer()
 	{
-		vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
+		vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();        // 顶点总数
 
 		vk::raii::Buffer       stagingBuffer({});
 		vk::raii::DeviceMemory stagingBufferMemory({});
 
-		// 在 CPU 上创建暂存缓冲区，分配由驱动管理的特殊 CPU 内存（GPU 可见，通过 PCIe 慢速读取）
+		// 暂存缓冲区（CPU 可访问，GPU 通过 PCIe 慢速读取）
+		createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, stagingBuffer, stagingBufferMemory);        // CPU 可访问，写入数据自动同步缓存，使 GPU 可见
+
+		// 映射内存
+		void *data = stagingBufferMemory.mapMemory(0, bufferSize);        // CPU 可访问的虚拟地址，映射到缓冲区内存（内存必须具备 eHostVisible 属性）（修改页表）
+		memcpy(data, vertices.data(), bufferSize);                        // 拷贝（后续 GPU DMA 通过 PCIe 搬运数据到显存）
+		stagingBufferMemory.unmapMemory();                                // 解除映射，虚拟地址不再可访问（恢复页表）
+
+		// 顶点缓冲区（显存）
 		createBuffer(bufferSize,
-		             vk::BufferUsageFlagBits::eTransferSrc,                                                       // 作为传输操作的源端
-		             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,        // CPU 可见，CPU 写入后立即对 GPU 可见
-		             stagingBuffer,
-		             stagingBufferMemory);
+		             vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer |
+		                 vk::BufferUsageFlagBits::eShaderDeviceAddress |                              // 允许获取缓冲区的 GPU 虚拟地址（光线追踪必须）
+		                 vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,        // 构建加速结构（AS）的输入源
+		             vk::MemoryPropertyFlagBits::eDeviceLocal, vertexBuffer, vertexBufferMemory);
 
-		// 使用映射内存（不是统一内存）
-		void *data = stagingBufferMemory.mapMemory(0, bufferSize);        // 建立映射（不是对显存的映射），data 指向 GPU 可见的特殊 CPU 内存（GPU 通过 PCIe 总线读取该 CPU 内存）（修改页表以建立虚拟地址与特殊 CPU 内存的映射关系）
-		memcpy(data, vertices.data(), bufferSize);                        // 将顶点数据从普通 CPU 内存拷贝到特殊 CPU 内存（不是显存，后续 GPU 的 DMA 通过 PCI-E 总线读取内存上的顶点缓冲区数据，较慢）
-		stagingBufferMemory.unmapMemory();                                // 解除映射（恢复页表，终止该虚拟地址(data)与特殊 CPU 内存的映射关系，不能再通过该指针访问特殊 CPU 内存）
-
-		// 在 GPU 上创建顶点缓冲区
-		createBuffer(bufferSize,
-		             vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eVertexBuffer,
-		             vk::MemoryPropertyFlagBits::eDeviceLocal,        // 分配在显存中
-		             vertexBuffer,
-		             vertexBufferMemory);
-
+		// 拷贝缓冲区（阻塞等待拷贝完成，才能安全 RAII 释放暂存缓冲区内存）
 		copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
 	}
 
 	// 创建索引缓冲区
 	void createIndexBuffer()
 	{
-		// 计算索引数据所需的总字节数
-		vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+		vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();        // 索引总数
 
-		// 创建暂存缓冲区
 		vk::raii::Buffer       stagingBuffer({});
 		vk::raii::DeviceMemory stagingBufferMemory({});
-		createBuffer(bufferSize,
-		             vk::BufferUsageFlagBits::eTransferSrc,                                                       // 这个缓冲区将作为传输数据的“源”
-		             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,        // CPU 可见，且 CPU 写入自动同步缓存，使 GPU 立即看到更新
-		             stagingBuffer,
-		             stagingBufferMemory);
 
-		// 将索引数据拷贝到暂存缓冲区
-		void *data = stagingBufferMemory.mapMemory(0, bufferSize);        // 从这块内存的第 0 字节开始映射，映射 bufferSize 长度
+		// 暂存缓冲区
+		createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, stagingBuffer, stagingBufferMemory);        // CPU 可访问，写入数据自动同步缓存，使 GPU 可见
+
+		// 映射内存
+		void *data = stagingBufferMemory.mapMemory(0, bufferSize);        // 从第 0 字节开始映射，映射 bufferSize 长度
 		memcpy(data, indices.data(), (size_t) bufferSize);
 		stagingBufferMemory.unmapMemory();
 
-		// 创建 GPU 专用的索引缓冲区
-		createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal, indexBuffer, indexBufferMemory);
+		// 索引缓冲区（显存）
+		createBuffer(bufferSize,
+		             vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eIndexBuffer |
+		                 vk::BufferUsageFlagBits::eShaderDeviceAddress |                               // GPU 地址（虚拟）
+		                 vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR |        // 构建加速结构（AS）的输入源
+		                 vk::BufferUsageFlagBits::eStorageBuffer,                                      // SSBO
+		             vk::MemoryPropertyFlagBits::eDeviceLocal, indexBuffer, indexBufferMemory);
 
 		copyBuffer(stagingBuffer, indexBuffer, bufferSize);
 	}
 
-	// 创建 UBO 缓冲区
+	// 创建 UV 缓冲区
+	void createUVBuffer()
+	{
+		// 提取顶点 UV 坐标
+		std::vector<glm::vec2> uvs;
+		uvs.reserve(vertices.size());
+		for (auto &v : vertices)
+		{
+			uvs.push_back(v.texCoord);
+		}
+
+		vk::DeviceSize         bufferSize = sizeof(uvs[0]) * uvs.size();
+		vk::raii::Buffer       stagingBuffer({});
+		vk::raii::DeviceMemory stagingBufferMemory({});
+
+		// 暂存缓冲区
+		createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, stagingBuffer, stagingBufferMemory);
+
+		// 映射内存
+		void *data = stagingBufferMemory.mapMemory(0, bufferSize);
+		memcpy(data, indices.data(), (size_t) bufferSize);
+		stagingBufferMemory.unmapMemory();
+
+		// UV 缓冲区（显存）
+		createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal, uvBuffer, uvBufferMemory);        // SSBO，允许被 Shader 随机访问
+
+		copyBuffer(stagingBuffer, uvBuffer, bufferSize);
+	}
+
+	// 创建实例查找表缓冲区
+	void createInstanceLUTBuffer()
+	{
+#if LAB_TASK_LEVEL >= LAB_TASK_INSTANCE_LUT
+		vk::DeviceSize         bufferSize = sizeof(InstanceLUT) * instanceLUTs.size();
+		vk::raii::Buffer       stagingBuffer({});
+		vk::raii::DeviceMemory stagingBufferMemory({});
+
+		// 暂存缓冲区
+		createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, stagingBuffer, stagingBufferMemory);
+
+		// 映射内存
+		void *data = stagingBufferMemory.mapMemory(0, bufferSize);
+		memcpy(data, indices.data(), (size_t) bufferSize);
+		stagingBufferMemory.unmapMemory();
+
+		// 实例查找表缓冲区（显存）
+		createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer, vk::MemoryPropertyFlagBits::eDeviceLocal, instanceLUTBuffer, instanceLUTBufferMemory);        // SSBO，允许被 Shader 随机访问
+
+		copyBuffer(stagingBuffer, instanceLUTBuffer, bufferSize);
+#endif
+	}
+
+	// 创建 UBO
 	void createUniformBuffers()
 	{
-		// 清理旧数据（重建 SwapChain 时调用）
+		// 清理旧数据（重建 SwapChain 需要）
 		uniformBuffers.clear();
 		uniformBuffersMemory.clear();
 		uniformBuffersMapped.clear();
 
-		// 为每一并行帧创建一个独立的 Buffer
+		// 每帧创建 UBO
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 		{
 			vk::DeviceSize         bufferSize = sizeof(UniformBufferObject);
 			vk::raii::Buffer       buffer({});
 			vk::raii::DeviceMemory bufferMem({});
 
-			// 创建 UBO
-			createBuffer(bufferSize,
-			             vk::BufferUsageFlagBits::eUniformBuffer,
-			             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,        // UBO 常驻于 CPU 内存，GPU 通过 PCIe 读取（因为 UBO 通常很小、 PCIe 带宽够用加上缓存机制，所以够用）
-			             buffer,
-			             bufferMem);
+			// 创建 UBO（不用暂存缓冲区）
+			createBuffer(bufferSize, vk::BufferUsageFlagBits::eUniformBuffer, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, buffer, bufferMem);        // UBO 常驻于 CPU 内存，GPU 通过 PCIe 读取（UBO 频繁更新且数据量小）（频繁更新且数据量大，用 SSBO + ComputeShader）
 
 			uniformBuffers.emplace_back(std::move(buffer));
 			uniformBuffersMemory.emplace_back(std::move(bufferMem));
-			uniformBuffersMapped.emplace_back(uniformBuffersMemory[i].mapMemory(0, bufferSize));
+			uniformBuffersMapped.emplace_back(uniformBuffersMemory[i].mapMemory(0, bufferSize));        // 持久映射
 		}
+	}
+
+	// 创建加速结构（AS）
+	void createAccelerationStructures()
+	{
+#if LAB_TASK_LEVEL >= LAB_TASK_AS_BUILD_AND_BIND
+		vk::BufferDeviceAddressInfo vai{.buffer = *vertexBuffer};
+		vk::DeviceAddress           vertexAddr = device.getBufferAddressKHR(vai);        // 顶点缓冲区 GPU 地址（虚拟）
+		vk::BufferDeviceAddressInfo iai{.buffer = *indexBuffer};
+		vk::DeviceAddress           indexAddr = device.getBufferAddressKHR(iai);        // 索引缓冲区 GPU 地址（虚拟）
+
+		instances.reserve(submeshes.size());
+		blasBuffers.reserve(submeshes.size());
+		blasMemories.reserve(submeshes.size());
+		blasHandles.reserve(submeshes.size());
+
+		// 仿射变换（3x4 矩阵，旋转、缩放、平移，不含投影变换）（省显存）
+		vk::TransformMatrixKHR identity{};
+		identity.matrix = std::array<std::array<float, 4>, 3>{{std::array<float, 4>{1.f, 0.f, 0.f, 0.f},
+		                                                       std::array<float, 4>{0.f, 1.f, 0.f, 0.f},
+		                                                       std::array<float, 4>{0.f, 0.f, 1.f, 0.f}}};
+
+		// 遍历子网格
+		for (size_t i = 0; i < submeshes.size(); i++)
+		{
+			const auto &submesh = submeshes[i];
+
+			// 几何体数据（三角形）
+			auto trianglesData = vk::AccelerationStructureGeometryTrianglesDataKHR{
+			    .vertexFormat = vk::Format::eR32G32B32Sfloat,                             // 顶点位置格式
+			    .vertexData   = vertexAddr,                                               // 顶点缓冲区地址
+			    .vertexStride = sizeof(Vertex),                                           // 顶点步长
+			    .maxVertex    = submesh.maxVertex,                                        // 涉及的最大顶点索引（优化用）
+			    .indexType    = vk::IndexType::eUint32,                                   // 顶点索引格式
+			    .indexData    = indexAddr + submesh.indexOffset * sizeof(uint32_t)        // 索引缓冲区地址
+			};
+
+			// 几何体数据（通用）（支持三角形、AABB、实例）
+			vk::AccelerationStructureGeometryDataKHR geometryData(trianglesData);
+
+			// 几何体描述（BLAS）
+			vk::AccelerationStructureGeometryKHR blasGeometry{
+			    .geometryType = vk::GeometryTypeKHR::eTriangles,
+			    .geometry     = geometryData,
+			    .flags        = vk::GeometryFlagBitsKHR::eOpaque        // 不透明物体
+			};
+
+#	if LAB_TASK_LEVEL >= LAB_TASK_AS_OPAQUE_FLAG
+			// 若是 AlphaCut 材质，则移除 Opaque 标志
+			blasGeometry.flags = (submesh.alphaCut) ? vk::GeometryFlagsKHR(0) : vk::GeometryFlagBitsKHR::eOpaque;
+#	endif
+
+			// 构建信息（BLAS）
+			vk::AccelerationStructureBuildGeometryInfoKHR blasBuildGeometryInfo{
+			    .type          = vk::AccelerationStructureTypeKHR::eBottomLevel,        // 类型（BLAS/TLAS）
+			    .mode          = vk::BuildAccelerationStructureModeKHR::eBuild,         // 模式（新建/更新）
+			    .geometryCount = 1,
+			    .pGeometries   = &blasGeometry,        // 几何体
+			};
+
+			// 查询构建所需内存（BLAS）
+			auto                                       primitiveCount = static_cast<uint32_t>(submesh.indexCount / 3);        // 三角形数量
+			vk::AccelerationStructureBuildSizesInfoKHR blasBuildSizes =
+			    device.getAccelerationStructureBuildSizesKHR(
+			        vk::AccelerationStructureBuildTypeKHR::eDevice,
+			        blasBuildGeometryInfo,
+			        {primitiveCount}        // 图元数量
+			    );
+
+			// 暂存缓冲区
+			vk::raii::Buffer       scratchBuffer = nullptr;
+			vk::raii::DeviceMemory scratchMemory = nullptr;
+			createBuffer(blasBuildSizes.buildScratchSize, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,        // SSBO，GPU 地址（虚拟）
+			             vk::MemoryPropertyFlagBits::eDeviceLocal, scratchBuffer, scratchMemory);
+
+			vk::BufferDeviceAddressInfo scratchAddressInfo{.buffer = *scratchBuffer};
+			vk::DeviceAddress           scratchAddr         = device.getBufferAddressKHR(scratchAddressInfo);        // 暂存缓冲区 GPU 地址（虚拟）
+			blasBuildGeometryInfo.scratchData.deviceAddress = scratchAddr;
+
+			// 创建 BLAS 缓冲区
+			vk::raii::Buffer       blasBuffer = nullptr;
+			vk::raii::DeviceMemory blasMemory = nullptr;
+			blasBuffers.emplace_back(std::move(blasBuffer));
+			blasMemories.emplace_back(std::move(blasMemory));
+			createBuffer(blasBuildSizes.accelerationStructureSize,
+			             vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR |                      // AS 专用存储
+			                 vk::BufferUsageFlagBits::eShaderDeviceAddress |                              // GPU 地址（虚拟）
+			                 vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,        // AS 构建时的输入
+			             vk::MemoryPropertyFlagBits::eDeviceLocal,
+			             blasBuffers[i], blasMemories[i]);
+
+			// BLAS 句柄
+			vk::AccelerationStructureCreateInfoKHR blasCreateInfo{
+			    .buffer = blasBuffers[i],
+			    .offset = 0,
+			    .size   = blasBuildSizes.accelerationStructureSize,
+			    .type   = vk::AccelerationStructureTypeKHR::eBottomLevel};
+			blasHandles.emplace_back(device.createAccelerationStructureKHR(blasCreateInfo));
+		}
+#endif
 	}
 
 	// 创建描述符池
