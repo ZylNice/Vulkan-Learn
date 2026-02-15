@@ -191,7 +191,7 @@ class HelloTriangleApplication
 	vk::raii::DeviceMemory             tlasMemory        = nullptr;
 	vk::raii::Buffer                   tlasScratchBuffer = nullptr;        // TLAS 构建时的临时缓冲区
 	vk::raii::DeviceMemory             tlasScratchMemory = nullptr;
-	vk::raii::AccelerationStructureKHR tlas              = nullptr;
+	vk::raii::AccelerationStructureKHR tlas              = nullptr;        // TLAS 句柄
 
 	// 实例查找表
 	struct InstanceLUT        // （用于在 Shader 中根据实例 ID 找到材质 ID）
@@ -648,7 +648,7 @@ class HelloTriangleApplication
 		std::vector<vk::DescriptorBindingFlags> bingdingFlags = {
 		    // 绑定标志（材质）
 		    vk::DescriptorBindingFlagBits::eUpdateAfterBind,                                                                                                                  // 绑定后更新（绑定点 0）
-		    vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind        // 部分绑定 | 可变数量 | 绑定后更新（绑定点 1）
+		    vk::DescriptorBindingFlagBits::ePartiallyBound | vk::DescriptorBindingFlagBits::eVariableDescriptorCount | vk::DescriptorBindingFlagBits::eUpdateAfterBind        // 部分绑定 | 可变数量 | 绑定后更新（绑定点 1）（Vukan 规定，可变描述符数量的绑定点，必须是布局的最后一个绑定点）
 		};
 		vk::DescriptorSetLayoutBindingFlagsCreateInfo flagsCreateInfo{.bindingCount = static_cast<uint32_t>(bingdingFlags.size()), .pBindingFlags = bingdingFlags.data()};        // 扩展结构体
 
@@ -1257,27 +1257,27 @@ class HelloTriangleApplication
 		                                                       std::array<float, 4>{0.f, 1.f, 0.f, 0.f},
 		                                                       std::array<float, 4>{0.f, 0.f, 1.f, 0.f}}};
 
-		// 遍历子网格
+		// 遍历子网格（构建 BLAS）
 		for (size_t i = 0; i < submeshes.size(); i++)
 		{
 			const auto &submesh = submeshes[i];
 
-			// 几何体数据（三角形）
+			// 几何体描述（三角形）
 			auto trianglesData = vk::AccelerationStructureGeometryTrianglesDataKHR{
 			    .vertexFormat = vk::Format::eR32G32B32Sfloat,                             // 顶点位置格式
 			    .vertexData   = vertexAddr,                                               // 顶点缓冲区地址
 			    .vertexStride = sizeof(Vertex),                                           // 顶点步长
-			    .maxVertex    = submesh.maxVertex,                                        // 涉及的最大顶点索引（优化用）
+			    .maxVertex    = submesh.maxVertex,                                        // 涉及的最大顶点索引（优化用，避免加载整个顶点缓冲区）
 			    .indexType    = vk::IndexType::eUint32,                                   // 顶点索引格式
 			    .indexData    = indexAddr + submesh.indexOffset * sizeof(uint32_t)        // 索引缓冲区地址
 			};
 
-			// 几何体数据（通用）（支持三角形、AABB、实例）
+			// 几何体描述（标准）（统一包装三角形、AABB、实例）
 			vk::AccelerationStructureGeometryDataKHR geometryData(trianglesData);
 
 			// 几何体描述（BLAS）
 			vk::AccelerationStructureGeometryKHR blasGeometry{
-			    .geometryType = vk::GeometryTypeKHR::eTriangles,
+			    .geometryType = vk::GeometryTypeKHR::eTriangles,        // 三角形几何体
 			    .geometry     = geometryData,
 			    .flags        = vk::GeometryFlagBitsKHR::eOpaque        // 不透明物体
 			};
@@ -1295,26 +1295,28 @@ class HelloTriangleApplication
 			    .pGeometries   = &blasGeometry,        // 几何体
 			};
 
-			// 查询构建所需内存（BLAS）
-			auto                                       primitiveCount = static_cast<uint32_t>(submesh.indexCount / 3);        // 三角形数量
-			vk::AccelerationStructureBuildSizesInfoKHR blasBuildSizes =
+			// 暂存缓冲区（大小 == 构建所需内存）（存放构建时的临时数据）
+			auto primitiveCount = static_cast<uint32_t>(submesh.indexCount / 3);        // 三角形数量
+
+			vk::AccelerationStructureBuildSizesInfoKHR blasBuildSizes =        // 构建所需内存（BLAS）
 			    device.getAccelerationStructureBuildSizesKHR(
 			        vk::AccelerationStructureBuildTypeKHR::eDevice,
 			        blasBuildGeometryInfo,
 			        {primitiveCount}        // 图元数量
 			    );
 
-			// 暂存缓冲区
+			// 暂存缓冲区（创建）
 			vk::raii::Buffer       scratchBuffer = nullptr;
 			vk::raii::DeviceMemory scratchMemory = nullptr;
 			createBuffer(blasBuildSizes.buildScratchSize, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,        // SSBO，GPU 地址（虚拟）
 			             vk::MemoryPropertyFlagBits::eDeviceLocal, scratchBuffer, scratchMemory);
 
+			// 暂存缓冲区（GPU 地址填入构建信息）
 			vk::BufferDeviceAddressInfo scratchAddressInfo{.buffer = *scratchBuffer};
 			vk::DeviceAddress           scratchAddr         = device.getBufferAddressKHR(scratchAddressInfo);        // 暂存缓冲区 GPU 地址（虚拟）
-			blasBuildGeometryInfo.scratchData.deviceAddress = scratchAddr;
+			blasBuildGeometryInfo.scratchData.deviceAddress = scratchAddr;                                           // 将暂存缓冲区地址，填入构建信息
 
-			// 创建 BLAS 缓冲区
+			// BLAS 缓冲区（存储构建好的 BLAS）
 			vk::raii::Buffer       blasBuffer = nullptr;
 			vk::raii::DeviceMemory blasMemory = nullptr;
 			blasBuffers.emplace_back(std::move(blasBuffer));
@@ -1326,87 +1328,222 @@ class HelloTriangleApplication
 			             vk::MemoryPropertyFlagBits::eDeviceLocal,
 			             blasBuffers[i], blasMemories[i]);
 
-			// BLAS 句柄
+			// BLAS 句柄（填入构建信息）
 			vk::AccelerationStructureCreateInfoKHR blasCreateInfo{
 			    .buffer = blasBuffers[i],
 			    .offset = 0,
 			    .size   = blasBuildSizes.accelerationStructureSize,
 			    .type   = vk::AccelerationStructureTypeKHR::eBottomLevel};
 			blasHandles.emplace_back(device.createAccelerationStructureKHR(blasCreateInfo));
+			blasBuildGeometryInfo.dstAccelerationStructure = blasHandles[i];        // 将 BLAS 句柄填入构建信息（存储构建结果）
+
+			// 构建范围（BLAS）
+			vk::AccelerationStructureBuildRangeInfoKHR blasRangeInfo{
+			    .primitiveCount  = primitiveCount,             // 图元数量
+			    .primitiveOffset = 0,                          // 图元偏移
+			    .firstVertex     = submesh.firstVertex,        // 顶点偏移
+			    .transformOffset = 0                           // 变换矩阵偏移
+			};
+
+			// 构建 BLAS
+			auto cmd = beginSingleTimeCommands();
+			cmd->buildAccelerationStructuresKHR({blasBuildGeometryInfo}, {&blasRangeInfo});        // GPU 构建加速结构（构建信息，构建范围）
+			endSingleTimeCommands(*cmd);
+
+			// BLAS 实例（实例化）
+			vk::AccelerationStructureDeviceAddressInfoKHR addrInfo{.accelerationStructure = *blasHandles[i]};
+			vk::DeviceAddress                             blasDeviceAddr = device.getAccelerationStructureAddressKHR(addrInfo);        // BLAS GPU 地址
+
+			vk::AccelerationStructureInstanceKHR instance{
+			    .transform                      = identity,             // 变换矩阵
+			    .mask                           = 0xFF,                 // 可见性掩码
+			    .accelerationStructureReference = blasDeviceAddr        // BLAS GPU 地址
+			};
+			instances.push_back(instance);
+
+#	if LAB_TASK_LEVEL >= LAB_TASK_INSTANCE_LUT
+			instances[i].instanceCustomIndex = static_cast<uint32_t>(i);                                     // 自定义索引（Shader 击中 Instance 时可获取此索引）
+			instanceLUTs.push_back({static_cast<uint32_t>(submesh.materialID), submesh.indexOffset});        // 根据索引，去实例查找表获取材质
+#	endif
 		}
+
+		// 实例缓冲区（TLAS）
+		vk::DeviceSize instBufferSize = sizeof(instances[0]) * instances.size();
+		createBuffer(instBufferSize, vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
+		             vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, instanceBuffer, instanceMemory);
+
+		void *ptr = instanceMemory.mapMemory(0, instBufferSize);
+		memcpy(ptr, instances.data(), instBufferSize);
+		instanceMemory.unmapMemory();
+
+		vk::BufferDeviceAddressInfo instanceAddrInfo{.buffer = instanceBuffer};
+		vk::DeviceAddress           instanceAddr = device.getBufferAddressKHR(instanceAddrInfo);
+
+		// 几何体描述（实例）
+		auto instanceData = vk::AccelerationStructureGeometryInstancesDataKHR{
+		    .arrayOfPointers = vk::False,        // （True：指针数组；False：结构体数组）
+		    .data            = instanceAddr};
+
+		// 几何体描述（标准）
+		vk::AccelerationStructureGeometryDataKHR geometryData(instanceData);
+
+		// 几何体描述（TLAS）
+		vk::AccelerationStructureGeometryKHR tlasGeometry{
+		    .geometryType = vk::GeometryTypeKHR::eInstances,        // 实例数据
+		    .geometry     = geometryData};
+
+		// 构建信息（TLAS）
+		vk::AccelerationStructureBuildGeometryInfoKHR tlasBuildGeometryInfo{
+		    .type          = vk::AccelerationStructureTypeKHR::eTopLevel,
+		    .mode          = vk::BuildAccelerationStructureModeKHR::eBuild,
+		    .geometryCount = 1,
+		    .pGeometries   = &tlasGeometry};
+
+#	if LAB_TASK_LEVEL >= LAB_TASK_AS_ANIMATION
+		tlasBuildGeometryInfo.flags = vk::BuildAccelerationStructureFlagBitsKHR::eAllowUpdate;        // 允许更新（动画）
+#	endif
+
+		// 暂存缓冲区（大小 == 构建所需内存）
+		auto primitiveCount = static_cast<uint32_t>(instances.size());        // 图元数量 = 实例数量
+
+		vk::AccelerationStructureBuildSizesInfoKHR tlasBuildSizes =
+		    device.getAccelerationStructureBuildSizesKHR(
+		        vk::AccelerationStructureBuildTypeKHR::eDevice,
+		        tlasBuildGeometryInfo,
+		        {primitiveCount}        // 图元数量
+		    );
+
+		// 暂存缓冲区（创建）
+		createBuffer(tlasBuildSizes.buildScratchSize, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,
+		             vk::MemoryPropertyFlagBits::eDeviceLocal, tlasScratchBuffer, tlasScratchMemory);
+
+		// 暂存缓冲区（GPU 地址填入构建信息）
+		vk::BufferDeviceAddressInfo scratchAddressInfo{.buffer = *tlasScratchBuffer};
+		vk::DeviceAddress           scratchAddr         = device.getBufferAddressKHR(scratchAddressInfo);
+		tlasBuildGeometryInfo.scratchData.deviceAddress = scratchAddr;
+
+		// TLAS 缓冲区
+		createBuffer(tlasBuildSizes.accelerationStructureSize, vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR | vk::BufferUsageFlagBits::eShaderDeviceAddress | vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR,
+		             vk::MemoryPropertyFlagBits::eDeviceLocal, tlasBuffer, tlasMemory);
+
+		// TLAS 句柄
+		vk::AccelerationStructureCreateInfoKHR tlasCreateInfo{
+		    .buffer = tlasBuffer,
+		    .offset = 0,
+		    .size   = tlasBuildSizes.accelerationStructureSize,
+		    .type   = vk::AccelerationStructureTypeKHR::eTopLevel};
+		tlas                                           = device.createAccelerationStructureKHR(tlasCreateInfo);
+		tlasBuildGeometryInfo.dstAccelerationStructure = tlas;        // 将 TLAS 句柄填入构建信息（存储构建结果）
+
+		// 构建范围（TLAS）
+		vk::AccelerationStructureBuildRangeInfoKHR tlasRangeInfo{
+		    .primitiveCount  = primitiveCount,        // 实例数量
+		    .primitiveOffset = 0,
+		    .firstVertex     = 0,
+		    .transformOffset = 0};
+
+		// 构建 TLAS
+		auto cmd = beginSingleTimeCommands();
+		cmd->buildAccelerationStructuresKHR({tlasBuildGeometryInfo}, {&tlasRangeInfo});
+		endSingleTimeCommands(*cmd);
 #endif
 	}
 
 	// 创建描述符池
 	void createDescriptorPool()
 	{
+		// 描述符总量
 		std::array poolSize{
-		    vk::DescriptorPoolSize(                        // 描述符池的大小
-		        vk::DescriptorType::eUniformBuffer,        // 描述符池存储的描述符的类型
-		        MAX_FRAMES_IN_FLIGHT                       // 描述符池存储的描述符的数量
-		        ),
-		    vk::DescriptorPoolSize(
-		        vk::DescriptorType::eCombinedImageSampler,
-		        MAX_FRAMES_IN_FLIGHT)};
-
-		vk::DescriptorPoolCreateInfo poolInfo{
-		    .flags         = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet,        // 允许单独释放描述符池中的某一描述符集
-		    .maxSets       = MAX_FRAMES_IN_FLIGHT,                                        // 描述符池能分配的描述符集的最大数量（因为描述符集这个容器本身也是要占显存的）
-		    .poolSizeCount = static_cast<uint32_t>(poolSize.size()),                      // 描述符池的数量
-		    .pPoolSizes    = poolSize.data()                                              // 每个描述符池的大小（数组指针）
+		    vk::DescriptorPoolSize(vk::DescriptorType::eUniformBuffer, MAX_FRAMES_IN_FLIGHT),                   // UBO（描述符类型，描述符数量）
+		    vk::DescriptorPoolSize(vk::DescriptorType::eAccelerationStructureKHR, MAX_FRAMES_IN_FLIGHT),        // TLAS/BLAS
+		    vk::DescriptorPoolSize(vk::DescriptorType::eStorageBuffer, MAX_FRAMES_IN_FLIGHT * 3),               // SSBO
+		    vk::DescriptorPoolSize(vk::DescriptorType::eSampler, MAX_FRAMES_IN_FLIGHT),                         // Sampler
+		    vk::DescriptorPoolSize(vk::DescriptorType::eSampledImage, (uint32_t) materials.size())              // Sampled Image
 		};
 
-		descriptorPool = vk::raii::DescriptorPool(device, poolInfo);        // 创建描述符池（描述符池不存放实际资源，描述符集相当于容器，描述符相当于指针，都不是实际资源）
+		// 创建描述符池
+		vk::DescriptorPoolCreateInfo poolInfo{
+		    .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet |        // 允许单独释放描述符集
+		             vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind,           // 允许绑定后更新描述符
+		    .maxSets       = MAX_FRAMES_IN_FLIGHT + 1,                             // 描述符集最大分配数量（+ 1 用于无绑定材质）
+		    .poolSizeCount = static_cast<uint32_t>(poolSize.size()),
+		    .pPoolSizes    = poolSize.data()};
+		descriptorPool = vk::raii::DescriptorPool(device, poolInfo);        // 描述符池(分配)->描述符集(容器)->描述符(指针)，均非实际资源
 	}
 
-	// 分配并写入描述符集
+	// 创建描述符集
 	void createDescriptorSets()
 	{
-		std::vector<vk::DescriptorSetLayout> layouts(MAX_FRAMES_IN_FLIGHT, *descriptorSetLayout);        // 将 descriptorSetLayout 重复 MAX_FRAMES_IN_FLIGHT 填入数组
-		vk::DescriptorSetAllocateInfo        allocInfo{
-		           .descriptorPool     = descriptorPool,                               // 指定从哪个描述符池中分配内存
-		           .descriptorSetCount = static_cast<uint32_t>(layouts.size()),        // 要分配多少个描述符集
-		           .pSetLayouts        = layouts.data()                                // 指定每个集合使用什么布局
-        };
+		// 全局描述符集（分配）
+		std::vector<vk::DescriptorSetLayout> globalLayouts(MAX_FRAMES_IN_FLIGHT, *descriptorSetLayoutGlobal);
+		vk::DescriptorSetAllocateInfo        allocInfoGlobal{.descriptorPool = descriptorPool, .descriptorSetCount = static_cast<uint32_t>(globalLayouts.size()), .pSetLayouts = globalLayouts.data()};        // 描述符池，描述符集(数组)，描述符集布局(数组，决定分配的描述符）
+		globalDescriptorSets.clear();
+		globalDescriptorSets = device.allocateDescriptorSets(allocInfoGlobal);
 
-		descriptorSets.clear();
-		descriptorSets = device.allocateDescriptorSets(allocInfo);
-
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)        // 遍历并行帧进行配置
+		// 全局描述符集（更新）
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 		{
-			// 获取描述符对应的 Buffer
-			vk::DescriptorBufferInfo bufferInfo{
-			    .buffer = uniformBuffers[i],                 // 帧对应的 UBO 缓冲区
-			    .offset = 0,                                 // 从 Buffer 哪一位置开始读取
-			    .range  = sizeof(UniformBufferObject)        // 读取多长的数据
-			};
+			// 绑定点 0：UBO
+			vk::DescriptorBufferInfo bufferInfo{.buffer = uniformBuffers[i], .offset = 0, .range = sizeof(UniformBufferObject)};                                                                                                           // UBO，偏移量，读取长度
+			vk::WriteDescriptorSet   bufferWrite{.dstSet = globalDescriptorSets[i], .dstBinding = 0, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eUniformBuffer, .pBufferInfo = &bufferInfo};        // 描述符集，绑定点，描述符(起始 + 长度 + 类型 + 数据源)
 
-			vk::DescriptorImageInfo imageInfo{
-			    .sampler     = textureSampler,                                // 指定采样器
-			    .imageView   = textureImageView,                              // 指定图像视图
-			    .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal        // 指定图像布局
-			};
+#if LAB_TASK_LEVEL >= LAB_TASK_AS_BUILD_AND_BIND
+			// 绑定点 1：TLAS
+			vk::WriteDescriptorSetAccelerationStructureKHR asInfo{.accelerationStructureCount = 1, .pAccelerationStructures = {&*tlas}};                                                                                                                      // TLAS 句柄
+			vk::WriteDescriptorSet                         asWrite{.pNext = &asInfo, .dstSet = globalDescriptorSets[i], .dstBinding = 1, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eAccelerationStructureKHR};        // 扩展(数据源)，描述符集，绑定点，描述符(起始 + 长度 + 类型)
+#endif
 
-			std::array descriptorWrites{
-			    // 描述如何更新描述符（此结构一次只能更新一个绑定点）
-			    vk::WriteDescriptorSet{
-			        .dstSet          = descriptorSets[i],                         // 要更新哪一个描述符集
-			        .dstBinding      = 0,                                         // 描述符集布局绑定点
-			        .dstArrayElement = 0,                                         // 从第 0 个元素开始写
-			        .descriptorCount = 1,                                         // 更新 1 个描述符
-			        .descriptorType  = vk::DescriptorType::eUniformBuffer,        // 描述符类型
-			        .pBufferInfo     = &bufferInfo                                // 数据来源
-			    },
-			    vk::WriteDescriptorSet{
-			        .dstSet          = descriptorSets[i],
-			        .dstBinding      = 1,
-			        .dstArrayElement = 0,
-			        .descriptorCount = 1,
-			        .descriptorType  = vk::DescriptorType::eCombinedImageSampler,
-			        .pImageInfo      = &imageInfo}};
+			// 绑定点 2：索引缓冲（SSBO）
+			vk::DescriptorBufferInfo indexBufferInfo{.buffer = indexBuffer, .offset = 0, .range = sizeof(uint32_t) * indices.size()};                                                                                                                // 索引缓冲
+			vk::WriteDescriptorSet   indexBufferWrite{.dstSet = globalDescriptorSets[i], .dstBinding = 2, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &indexBufferInfo};        // 描述符集，绑定点，描述符(起始 + 长度 + 类型 + 数据源)
 
+			// 绑定点 3：UV 缓冲（SSBO）
+			vk::DescriptorBufferInfo uvBufferInfo{.buffer = uvBuffer, .offset = 0, .range = sizeof(glm::vec2) * vertices.size()};                                                                                                              // uv 缓冲
+			vk::WriteDescriptorSet   uvBufferWrite{.dstSet = globalDescriptorSets[i], .dstBinding = 3, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &uvBufferInfo};        // 描述符集，绑定点，描述符(起始 + 长度 + 类型 + 数据源)
+
+#if LAB_TASK_LEVEL >= LAB_TASK_INSTANCE_LUT
+			// 绑定点 4：实例查找表缓冲（SSBO）
+			vk::DescriptorBufferInfo instanceLUTBufferInfo{.buffer = instanceLUTBuffer, .offset = 0, .range = sizeof(InstanceLUT) * instanceLUTs.size()};                                                                                                        // 实例查找表缓冲
+			vk::WriteDescriptorSet   instanceLUTBufferWrite{.dstSet = globalDescriptorSets[i], .dstBinding = 4, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eStorageBuffer, .pBufferInfo = &instanceLUTBufferInfo};        // 描述符集，绑定点，描述符(起始 + 长度 + 类型 + 数据源)
+#endif
+
+#if LAB_TASK_LEVEL >= LAB_TASK_INSTANCE_LUT
+			// UBO，AS，Index，UV，LUT
+			std::array<vk::WriteDescriptorSet, 5> descriptorWrites{bufferWrite, asWrite, indexBufferWrite, uvBufferWrite, instanceLUTBufferWrite};
+#elif LAB_TASK_LEVEL >= LAB_TASK_AS_BUILD_AND_BIND
+			// UBO，AS，Index，UV
+			std::array<vk::WriteDescriptorSet, 4> descriptorWrites{bufferWrite, asWrite, indexBufferWrite, uvBufferWrite};
+#else
+			// UBO，Index，UV
+			std::array<vk::WriteDescriptorSet, 3> descriptorWrites{bufferWrite, indexBufferWrite, uvBufferWrite};
+#endif
 			device.updateDescriptorSets(descriptorWrites, {});        // 更新描述符集
 		}
+
+		// 材质描述符集（分配）
+		std::vector<uint32_t>                                variableCounts = {static_cast<uint32_t>(textureImageViews.size())};
+		vk::DescriptorSetVariableDescriptorCountAllocateInfo variableCountInfo{.descriptorSetCount = 1, .pDescriptorCounts = variableCounts.data()};        // 描述符数量（可变）
+		std::vector<vk::DescriptorSetLayout>                 layouts{*descriptorSetLayoutMaterial};
+		vk::DescriptorSetAllocateInfo                        allocInfo{.pNext = &variableCountInfo, .descriptorPool = descriptorPool, .descriptorSetCount = static_cast<uint32_t>(layouts.size()), .pSetLayouts = layouts.data()};        // 扩展，描述符池，描述符集(数组)，描述符布局(数组)（Vukan 规定，可变描述符数量绑定点必须是布局最后一个绑定点）
+		materialDescriptorSets = device.allocateDescriptorSets(allocInfo);
+
+		// 绑定点 0：纹理采样器（Sampler）
+		vk::DescriptorImageInfo samplerInfo{.sampler = textureSampler};
+		vk::WriteDescriptorSet  samplerWrite{.dstSet = materialDescriptorSets[0], .dstBinding = 0, .dstArrayElement = 0, .descriptorCount = 1, .descriptorType = vk::DescriptorType::eSampler, .pImageInfo = &samplerInfo};        // 描述符集，绑定点，描述符(起始 + 长度 + 类型 + 数据源)
+		device.updateDescriptorSets({samplerWrite}, {});
+
+		// 绑定点 1：纹理数组（Sampled Images）
+		std::vector<vk::DescriptorImageInfo> imageInfos;
+		imageInfos.reserve(textureImageViews.size());
+
+		// 遍历纹理
+		for (auto &iv : textureImageViews)
+		{
+			vk::DescriptorImageInfo imageInfo{.imageView = iv, .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal};        // 数据源
+			imageInfos.push_back(imageInfo);
+		}
+		vk::WriteDescriptorSet materialWrite{.dstSet = materialDescriptorSets[0], .dstBinding = 1, .dstArrayElement = 0, .descriptorCount = static_cast<uint32_t>(imageInfos.size()), .descriptorType = vk::DescriptorType::eSampledImage, .pImageInfo = imageInfos.data()};        // 描述符集，绑定点，描述符(起始 + 长度 + 类型 + 数据源)
+		device.updateDescriptorSets({materialWrite}, {});
 	}
 
 	// 辅助函数，分配 Buffer 显存
