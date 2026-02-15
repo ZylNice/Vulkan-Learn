@@ -60,7 +60,7 @@ struct Vertex
 	glm::vec3                                color;
 	glm::vec2                                texCoord;
 	glm::vec3                                normal;
-	static vk::VertexInputBindingDescription getBindingDescription()        // 顶点缓冲区绑定点
+	static vk::VertexInputBindingDescription getBindingDescription()        // 顶点输入绑定点
 	{
 		return {0, sizeof(Vertex), vk::VertexInputRate::eVertex};        // 绑定点，顶点步长（字节），更新频率（顶点/实例）
 	}
@@ -68,7 +68,7 @@ struct Vertex
 	static std::array<vk::VertexInputAttributeDescription, 4> getAttributeDescriptions()        // 属性描述（如何读取一个顶点中的具体属性）
 	{
 		return {
-		    vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)),          // 位置（location，归属绑定点，格式，大小）
+		    vk::VertexInputAttributeDescription(0, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, pos)),          // 位置（location，顶点输入绑定点，格式，大小）
 		    vk::VertexInputAttributeDescription(1, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, color)),        // 颜色
 		    vk::VertexInputAttributeDescription(2, 0, vk::Format::eR32G32Sfloat, offsetof(Vertex, texCoord)),        // UV
 		    vk::VertexInputAttributeDescription(3, 0, vk::Format::eR32G32B32Sfloat, offsetof(Vertex, normal))        // 法线
@@ -1465,7 +1465,7 @@ class HelloTriangleApplication
 		vk::DescriptorPoolCreateInfo poolInfo{
 		    .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet |        // 允许单独释放描述符集
 		             vk::DescriptorPoolCreateFlagBits::eUpdateAfterBind,           // 允许绑定后更新描述符
-		    .maxSets       = MAX_FRAMES_IN_FLIGHT + 1,                             // 描述符集最大分配数量（+ 1 用于无绑定材质）
+		    .maxSets       = MAX_FRAMES_IN_FLIGHT + 1,                             // 描述符集最大分配数量（+ 1 用于材质描述符集）
 		    .poolSizeCount = static_cast<uint32_t>(poolSize.size()),
 		    .pPoolSizes    = poolSize.data()};
 		descriptorPool = vk::raii::DescriptorPool(device, poolInfo);        // 描述符池(分配)->描述符集(容器)->描述符(指针)，均非实际资源
@@ -1546,156 +1546,115 @@ class HelloTriangleApplication
 		device.updateDescriptorSets({materialWrite}, {});
 	}
 
-	// 辅助函数，分配 Buffer 显存
-	void createBuffer(
-	    vk::DeviceSize          size,               // 缓冲区大小
-	    vk::BufferUsageFlags    usage,              // 缓冲区用途（驱动要求）
-	    vk::MemoryPropertyFlags properties,         // 用户所需的内存属性（用户要求）
-	    vk::raii::Buffer       &buffer,             // 创建好的 RAII 缓冲区对象引用（传出参数）
-	    vk::raii::DeviceMemory &bufferMemory        // 分配好的 RAII 显存对象引用（传出参数）
-	)
+	// 辅助函数：创建缓冲区
+	void createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage, vk::MemoryPropertyFlags properties, vk::raii::Buffer &buffer, vk::raii::DeviceMemory &bufferMemory)        // 大小，用途，内存属性，缓冲区(传出)，缓冲区内存(传出)
 	{
-		// 缓冲区创建信息
-		vk::BufferCreateInfo bufferInfo{
-		    .size        = size,
-		    .usage       = usage,
-		    .sharingMode = vk::SharingMode::eExclusive};
+		// 缓冲区（创建句柄）
+		vk::BufferCreateInfo bufferInfo{.size = size, .usage = usage, .sharingMode = vk::SharingMode::eExclusive};        // 大小，用途，共享模式
+		buffer = vk::raii::Buffer(device, bufferInfo);
 
-		buffer = vk::raii::Buffer(device, bufferInfo);        // 创建缓冲区句柄
+		// 缓冲区（分配内存）
+		vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();                                                                                        // 内存需求
+		vk::MemoryAllocateInfo allocInfo{.allocationSize = memRequirements.size, .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)};        // 实际大小（内存对齐，填充尾部），内存类型索引（满足内存属性要求）
 
-		vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
+		vk::MemoryAllocateFlagsInfo allocFlagsInfo{};        // 处理扩展：缓冲区 GPU 地址
+		if (usage & vk::BufferUsageFlagBits::eShaderDeviceAddress)
+		{
+			allocFlagsInfo.flags = vk::MemoryAllocateFlagBits::eDeviceAddress;
+			allocInfo.pNext      = &allocFlagsInfo;
+		}
 
-		// 内存分配信息
-		vk::MemoryAllocateInfo allocInfo{
-		    .allocationSize  = memRequirements.size,                                             // 驱动要求的实际缓冲区大小，可能比我们请求的 size 略大，用于对齐（[Buffer] + [空隙])
-		    .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)        // 同时满足驱动要求（memoryTypeBits）和用户要求（properties）的内存类型
-		};
+		bufferMemory = vk::raii::DeviceMemory(device, allocInfo);        // 分配内存
 
-		// 分配显存
-		bufferMemory = vk::raii::DeviceMemory(device, allocInfo);
-
-		// 将显存绑定到缓冲区句柄，从显存的第 0 个字节开始用
-		buffer.bindMemory(bufferMemory, 0);
+		buffer.bindMemory(bufferMemory, 0);        // 句柄绑定内存（内存，内存偏移量）
 	}
 
-	// 辅助函数，一次性命令缓冲（开始）
+	// 辅助函数：一次性命令缓冲（开始）
 	std::unique_ptr<vk::raii::CommandBuffer> beginSingleTimeCommands()
 	{
-		vk::CommandBufferAllocateInfo allocInfo{
-		    .commandPool        = commandPool,                             // 从哪个命令池分配命令缓冲区
-		    .level              = vk::CommandBufferLevel::ePrimary,        // 主命令缓冲，可以直接提交给队列执行
-		    .commandBufferCount = 1                                        // 仅创建一个命令缓冲
-		};
+		// 命令缓冲（分配）
+		vk::CommandBufferAllocateInfo            allocInfo{.commandPool = commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1};        // 命令池，主命令缓冲区(可直接提交给队列)
 		std::unique_ptr<vk::raii::CommandBuffer> commandBuffer = std::make_unique<vk::raii::CommandBuffer>(std::move(vk::raii::CommandBuffers(device, allocInfo).front()));
 
-		vk::CommandBufferBeginInfo beginInfo{
-		    .flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit        // 告诉驱动程序，这个命令缓冲区仅会提交一次，用完就抛弃（让驱动基于这个信息做优化）
-		};
+		// 开始录制
+		vk::CommandBufferBeginInfo beginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit};        // 仅提交一次（驱动基于此信息优化）
 		commandBuffer->begin(beginInfo);
 		return commandBuffer;
 	}
 
-	// 辅助函数，一次性命令缓冲（结束并提交等待)
+	// 辅助函数：一次性命令缓冲（结束 + 提交 + 等待)
 	void endSingleTimeCommands(vk::raii::CommandBuffer &commandBuffer)
 	{
+		// 结束录制
 		commandBuffer.end();
 
-		vk::SubmitInfo submitInfo{
-		    .commandBufferCount = 1,                      // 提交的命令缓冲区数量
-		    .pCommandBuffers    = &*commandBuffer,        // 命令缓冲区句柄指针
-		};
-		queue.submit(submitInfo, nullptr);        // 提交命令缓冲区
-		queue.waitIdle();                         // 阻塞 CPU 线程，等待 GPU 执行完队列中的所有任务
+		// 提交 + 等待
+		vk::SubmitInfo submitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandBuffer};
+		graphicsQueue.submit(submitInfo, nullptr);        // 命令缓冲，栅栏
+		graphicsQueue.waitIdle();                         // 阻塞 CPU 线程，直到图形队列所有命令执行完毕
 	}
 
-	// 辅助函数，Buffer 拷贝
-	void copyBuffer(
-	    vk::raii::Buffer &srcBuffer,        // 源缓冲区（缓冲区的拷贝不涉及压缩传输，图像的拷贝才涉及压缩传输）
-	    vk::raii::Buffer &dstBuffer,        // 目标缓冲区
-	    vk::DeviceSize    size              // 要拷贝的字节大小
-	)
+	// 辅助函数：拷贝缓冲区（缓冲区拷贝->无压缩传输，图形拷贝->压缩传输）
+	void copyBuffer(vk::raii::Buffer &srcBuffer, vk::raii::Buffer &dstBuffer, vk::DeviceSize size)        // 源缓冲，目标缓冲，拷贝大小(字节)
 	{
-		// 配置命令缓冲区分配信息
-		vk::CommandBufferAllocateInfo allocInfo{
-		    .commandPool        = commandPool,                             // 从哪个命令池分配（必须支持传输操作）
-		    .level              = vk::CommandBufferLevel::ePrimary,        // 主命令缓冲区，可以直接提交给队列
-		    .commandBufferCount = 1                                        // 仅创建一个命令缓冲区
-		};
+		// 命令缓冲（分配）
+		vk::CommandBufferAllocateInfo allocInfo{.commandPool = commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = 1};        // 命令池，主命令缓冲
+		vk::raii::CommandBuffer       commandCopyBuffer = std::move(device.allocateCommandBuffers(allocInfo).front());
 
-		// 分配命令缓冲区
-		vk::raii::CommandBuffer commandCopyBuffer = std::move(device.allocateCommandBuffers(allocInfo).front());
+		// 录制
+		commandCopyBuffer.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});        // 开始录制（eOneTimeSubmit：该缓冲仅提交一次，驱动可据此优化）
+		commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy(0, 0, size));                                    // 拷贝命令（缓冲区内存对齐：内部数据紧密排列，尾部填充对齐）（拷贝有效区间，省略尾部即可）
+		commandCopyBuffer.end();                                                                                             // 结束录制
 
-		// eOneTimeSubmit 是一个性能提示，告诉驱动这个命令缓冲区只会被提交一次
-		commandCopyBuffer.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});        // 开始录制
-
-		commandCopyBuffer.copyBuffer(*srcBuffer, *dstBuffer, vk::BufferCopy(0, 0, size));        // 录制拷贝命令，由于缓冲区的对齐是 [Buffer] + [空隙]，所以 memcpy 前半段（这里内部结构无需对齐），后半段本就是空隙
-
-		commandCopyBuffer.end();        // 结束录制
-
-		queue.submit(
-		    vk::SubmitInfo{
-		        .commandBufferCount = 1,
-		        .pCommandBuffers    = &*commandCopyBuffer},
-		    nullptr);        // 提交到命令队列
-
-		// 阻塞 CPU，直到队列中所有操作完成（确保拷贝操作完成）
-		queue.waitIdle();
+		// 提交 + 等待
+		graphicsQueue.submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandCopyBuffer}, nullptr);        // 命令缓冲，栅栏
+		graphicsQueue.waitIdle();                                                                                              // 阻塞 CPU 线程，直到拷贝完成
 	}
 
-	// 辅助函数，查找内存类型
-	uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties)        // 根据过滤器和属性查找适合的内存类型索引
+	// 辅助函数：查找内存类型索引
+	uint32_t findMemoryType(uint32_t typeFilter, vk::MemoryPropertyFlags properties)        // 内存类型（要求，位掩码），内存属性（要求，位掩码）
 	{
-		vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();        // 获取显卡所有内存堆和内存类型的信息
+		vk::PhysicalDeviceMemoryProperties memProperties = physicalDevice.getMemoryProperties();        // GPU 内存堆、内存类型（详细信息）
 
-		for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)        // 遍历显卡支持的内存类型（理论上可以直接用极客写法，仅遍历 buffer 要求的内存类型，但可读性和兼容性都差）
+		// 遍历 GPU 内存类型
+		for (uint32_t i = 0; i < memProperties.memoryTypeCount; i++)        // 理论上可用位运算优化，仅遍历要求的内存类型
 		{
-			if ((typeFilter & (1 << i)) &&                                                     // 检查 Buffer 是否支持第 i 种内存类型
-			    (memProperties.memoryTypes[i].propertyFlags & properties) == properties        // 检查第 i 种内存类型是否包含了我们需要的所有属性
-			)
+			if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags & properties) == properties)        // 内存类型合规 && 内存属性合规
 			{
-				return i;        // 找到了，返回索引
+				return i;        // 返回内存类型索引
 			}
 		}
-
 		throw std::runtime_error("failed to find suitable memory type");
 	};
 
+	// 创建命令缓冲
 	void createCommandBuffer()
 	{
-		vk::CommandBufferAllocateInfo allocInfo{
-		    .commandPool        = commandPool,                             // 从哪个命令池分配命令缓冲
-		    .level              = vk::CommandBufferLevel::ePrimary,        // 主要缓冲，可以直接提交给队列执行
-		    .commandBufferCount = MAX_FRAMES_IN_FLIGHT                     // 分配(两个)命令缓冲
-		};
-		commandBuffers = vk::raii::CommandBuffers(device, allocInfo);        // CommandBuffers 函数返回的是命令缓冲数组
+		commandBuffers.clear();
+		vk::CommandBufferAllocateInfo allocInfo{.commandPool = commandPool, .level = vk::CommandBufferLevel::ePrimary, .commandBufferCount = MAX_FRAMES_IN_FLIGHT};        // 命令池，主命令缓冲，两个缓冲
+		commandBuffers = vk::raii::CommandBuffers(device, allocInfo);                                                                                                      // CommandBuffers() 返回命令缓冲数组
 	}
 
 	// 录制命令缓冲
 	void recordCommandBuffer(uint32_t imageIndex)
 	{
+		// 开始录制
 		auto &commandBuffer = commandBuffers[frameIndex];
-		commandBuffer.begin({});        // 开始录制命令
+		commandBuffer.begin({});
 
-		transition_image_layout(        // 转换 MSAA 颜色图像布局
-		    *colorImage,
-		    vk::ImageLayout::eUndefined,
-		    vk::ImageLayout::eColorAttachmentOptimal,
-		    {},
-		    vk::AccessFlagBits2::eColorAttachmentWrite,
-		    vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-		    vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-		    vk::ImageAspectFlagBits::eColor);
+		// 转换图像布局（交换链图：未定义->颜色附件）
+		transition_image_layout(
+		    swapChainImages[imageIndex],                               // 图像
+		    vk::ImageLayout::eUndefined,                               // 原布局
+		    vk::ImageLayout::eColorAttachmentOptimal,                  // 目标布局
+		    {},                                                        // 访问标志（屏障执行前）（同步区域）（要同步缓存的操作，管线阶段->多个操作）
+		    vk::AccessFlagBits2::eColorAttachmentWrite,                // 访问标志（屏障执行后）
+		    vk::PipelineStageFlagBits2::eColorAttachmentOutput,        // 管线阶段（屏障执行前）（同步时机）
+		    vk::PipelineStageFlagBits2::eColorAttachmentOutput,        // 管线阶段（屏障执行后）
+		    vk::ImageAspectFlagBits::eColor                            // 图像层面（颜色）
+		);
 
-		transition_image_layout(        // 转换 Swapchain 图像布局
-		    swapChainImages[imageIndex],
-		    vk::ImageLayout::eUndefined,                               // 不关心图像的原布局（因为不保留原内容）
-		    vk::ImageLayout::eColorAttachmentOptimal,                  // 将图像布局切换为颜色附件最优布局
-		    {},                                                        // 无需对源阶段地输出结果做任何同步处理（从源阶段缓存写入内存）
-		    vk::AccessFlagBits2::eColorAttachmentWrite,                // 颜色写入操作（动作）（真正参与同步的操作）（一个流水线阶段有多个操作，不是每个都要参与同步）
-		    vk::PipelineStageFlagBits2::eColorAttachmentOutput,        // 上一颜色写入阶段（时间点）（该阶段一定在屏障前结束）（确保颜色写入结束后，才做图像内存布局转换）
-		    vk::PipelineStageFlagBits2::eColorAttachmentOutput,        // 下一颜色写入阶段（时间点）（该阶段一定在屏障后开始）（确保图像内存布局转换结束后，才执行颜色写入）
-		    vk::ImageAspectFlagBits::eColor);
-
+		// 转换图像布局（深度图：未定义->深度附件）
 		transition_image_layout(
 		    *depthImage,
 		    vk::ImageLayout::eUndefined,
@@ -1706,82 +1665,66 @@ class HelloTriangleApplication
 		    vk::PipelineStageFlagBits2::eEarlyFragmentTests | vk::PipelineStageFlagBits2::eLateFragmentTests,        // 影响在屏障指令之后提交的 drawcall
 		    vk::ImageAspectFlagBits::eDepth);
 
-		vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);        // 定义清除颜色
-		vk::ClearValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);
+		// 清除值
+		vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);        // 黑色背景
+		vk::ClearValue clearDepth = vk::ClearDepthStencilValue(1.0f, 0);                // 深度 1.0（最远）
 
-		// 颜色附件信息
+		// 颜色附件
 		vk::RenderingAttachmentInfo colorAttachmentInfo = {
-		    .imageView          = *colorImageView,
-		    .imageLayout        = vk::ImageLayout::eColorAttachmentOptimal,
-		    .resolveMode        = vk::ResolveModeFlagBits::eAverage,               // 启用解析，模式为取平均值
-		    .resolveImageView   = swapChainImageViews[imageIndex],                 // 解析的目标
-		    .resolveImageLayout = vk::ImageLayout::eColorAttachmentOptimal,        // 解析目标的布局
-		    .loadOp             = vk::AttachmentLoadOp::eClear,
-		    .storeOp            = vk::AttachmentStoreOp::eDontCare,        // MSAA 数据解析后就不需要保留了，设为 DontCare 提高性能
-		    .clearValue         = clearColor};
+		    .imageView   = swapChainImageViews[imageIndex],                 // 图像
+		    .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,        // 图像布局（图像必须为此布局）
+		    .loadOp      = vk::AttachmentLoadOp::eClear,                    // 加载操作（清除）
+		    .storeOp     = vk::AttachmentStoreOp::eStore,                   // 存储操作（保存）
+		    .clearValue  = clearColor};
 
-		// 深度附件信息
+		// 深度附件
 		vk::RenderingAttachmentInfo depthAttachmentInfo = {
 		    .imageView   = depthImageView,
 		    .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
-		    .loadOp      = vk::AttachmentLoadOp::eClear,            // 清除旧深度
-		    .storeOp     = vk::AttachmentStoreOp::eDontCare,        // 渲染完后无需保留深度图
+		    .loadOp      = vk::AttachmentLoadOp::eClear,            // 加载操作（清除）
+		    .storeOp     = vk::AttachmentStoreOp::eDontCare,        // 存储操作（不保存）
 		    .clearValue  = clearDepth};
 
 		// 渲染信息
 		vk::RenderingInfo renderingInfo = {
-		    .renderArea           = {.offset = {0, 0}, .extent = swapChainExtent},        // 渲染区域，从左上角（0，0）向右下渲染 extent 宽高大小的图
-		    .layerCount           = 1,                                                    // 纹理层数
-		    .colorAttachmentCount = 1,                                                    // 颜色附件数量
-		    .pColorAttachments    = &colorAttachmentInfo,                                 // 链接颜色附件
-		    .pDepthAttachment     = &depthAttachmentInfo                                  // 链接深度附件
+		    .renderArea           = {.offset = {0, 0}, .extent = swapChainExtent},        // 渲染区域（左上->右下）
+		    .layerCount           = 1,                                                    // 视图层数（顶点->多个相机空间位置）
+		    .colorAttachmentCount = 1,
+		    .pColorAttachments    = &colorAttachmentInfo,        // 颜色附件
+		    .pDepthAttachment     = &depthAttachmentInfo         // 深度附件
 		};
 
-		commandBuffer.beginRendering(renderingInfo);        // 开始动态渲染
+		// 开始渲染（动态）
+		commandBuffer.beginRendering(renderingInfo);
+		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);                                                                                  // 绑定图形管线（着色器 + 各项固定配置）
+		commandBuffer.setViewport(0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent.width), static_cast<float>(swapChainExtent.height), 0.0f, 1.0f));        // 动态视口(0)（左上角，宽高，min，max）(深度映射：[0,1]->[min,max])（Vulkan/DirectX NDC 的 z 轴范围是 [0,1]）
+		commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent));                                                                                     // 动态裁剪(0)（左上角，宽高）
 
-		commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *graphicsPipeline);        // 绑定图形管线（告诉 GPU 使用那套着色器和装态配置）
+		commandBuffer.bindVertexBuffers(0, *vertexBuffer, {0});                        // 顶点缓冲（顶点输入绑定点 0，偏移量）(顶点输入绑定点(location)，描述符绑定点(set, binding)，不同）
+		commandBuffer.bindIndexBuffer(*indexBuffer, 0, vk::IndexType::eUint32);        // 索引缓冲（偏移量，索引类型）（索引缓冲唯一，故无需绑定点）
 
-		commandBuffer.setViewport(0,                                                     // 第 0 号视口（Vulkan 支持同时使用多个视口，分屏游戏）
-		                          vk::Viewport(                                          // 设置动态视口
-		                              0.0f, 0.0f,                                        // 视口矩形左上角坐标
-		                              static_cast<float>(swapChainExtent.width),         // 视口宽度
-		                              static_cast<float>(swapChainExtent.height),        // 视口高度
-		                              0.0f,                                              // 最小深度（Vulkan 的 NDC 空间与 DirectX 保持一致，与 OpenGL 不同）(Vulkan 的 NDC 的 z 轴范围是 [0, 1]，不再是标准立方体的 [-1, 1]）
-		                              1.0f                                               // 最大深度
-		                              ));
+		commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, *globalDescriptorSets[frameIndex], nullptr);          // 全局描述符集（管线，管线布局，描述符集索引(管线布局)，描述符集数据源，动态偏移量）（动态偏移量：仅影响描述符集中的动态 UBO，使不同模型切换时无需切换描述符集，更改偏移量即可）
+		commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 1, *materialDescriptorSets[frameIndex], nullptr);        // 材质描述符集
 
-		commandBuffer.setScissor(0,                             // 对应第 0 号视口的裁剪区域
-		                         vk::Rect2D(                    // 设置动态裁剪
-		                             vk::Offset2D(0, 0),        // 左上角起点
-		                             swapChainExtent            // 裁剪矩形宽高
-		                             ));
+		for (auto &sub : submeshes)
+		{
+			// 推送常量
+			PushConstant pushConstant = {
+			    .materialIndex = sub.materialID < 0 ? 0u : static_cast<uint32_t>(sub.materialID),        // 材质 ID
+#if LAB_TASK_LEVEL >= LAB_TASK_REFLECTIONS
+			    .reflective = sub.reflective        // 反射标记
+#endif
+			};
+			commandBuffer.pushConstants<PushConstant>(pipelineLayout, vk::ShaderStageFlagBits::eFragment, 0, pushConstant);        // 发送
 
-		commandBuffer.bindVertexBuffers(0,                    // 将 Buffer 绑定到管线的 0 号绑定点（管线创建时已经将 0 号绑定点解释为了顶点缓冲区）
-		                                *vertexBuffer,        // 顶点缓冲区
-		                                {0}                   // 从 buffer 的第 0 个字节开始读
-		);
+			// 绘制
+			commandBuffer.drawIndexed(sub.indexCount, 1, sub.indexOffset, 0, 0);        // 索引总数，实例总数，偏移量(索引)，偏移量(顶点)，偏移量(实例)
+		}
 
-		commandBuffer.bindIndexBuffer(*indexBuffer,        // 索引缓冲区（不需要规定绑定点，因为索引缓冲区必须唯一，而顶点缓冲区可以将不同属性拆分到多个缓冲区）
-		                              0,                   // 偏移量
-		                              vk::IndexTypeValue<decltype(indices)::value_type>::value);
+		// 结束渲染（动态）
+		commandBuffer.endRendering();
 
-		commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,        // 绑定到图形管线（图形/计算/光线追踪）
-		                                 pipelineLayout,                          // 管线布局（描述管线要求的描述符集布局）
-		                                 0,                                       // 从管线的第几个描述符集开始绑定
-		                                 *descriptorSets[frameIndex],             // 具体的描述符集
-		                                 nullptr                                  // 动态偏移量数组（影响描述符集中的动态 UBO，使得不同模型切换时无需切换描述符集，更改偏移量即可）
-		);
-
-		commandBuffer.drawIndexed(indices.size(),        // 索引总数（这次绘制一共要读取多少索引）
-		                          1,                     // 实例数量（一个模型画几次，实例化）
-		                          0,                     // 首索引偏移（从索引缓冲区的哪里开始读）
-		                          0,                     // 首顶点偏移（最终读取顶点 ID = 从索引缓冲拿到的值 + 这个偏移量）
-		                          0                      // 首实例偏移（定义 gl_InstanceIndex 从几开始数）
-		);
-
-		commandBuffer.endRendering();        // 结束动态渲染
-
-		// 转换 Swapchain 图像布局，准备显示
+		// 转换图像布局（交换链图：颜色附件->呈现状态）（准备显示）
 		transition_image_layout(
 		    swapChainImages[imageIndex],
 		    vk::ImageLayout::eColorAttachmentOptimal,
@@ -1792,64 +1735,55 @@ class HelloTriangleApplication
 		    vk::PipelineStageFlagBits2::eBottomOfPipe,
 		    vk::ImageAspectFlagBits::eColor);
 
-		commandBuffer.end();        // 结束录制
+		// 结束录制
+		commandBuffer.end();
 	}
 
-	// 在主循环阶段的屏障
-	void transition_image_layout(
-	    vk::Image               image,                  // Swapchain 中的哪一张图
-	    vk::ImageLayout         old_layout,             // 初始布局
-	    vk::ImageLayout         new_layout,             // 目标布局
-	    vk::AccessFlags2        src_access_mask,        // 内存操作（何种读写动作）
-	    vk::AccessFlags2        dst_access_mask,        // 内存操作（何种读写动作）
-	    vk::PipelineStageFlags2 src_stage_mask,         // 源流水线阶段 （时间点）
-	    vk::PipelineStageFlags2 dst_stage_mask,         // 目标流水线阶段（时间点）
-	    vk::ImageAspectFlags    image_aspect_flags)
+	// 辅助函数：图像布局转换（主循环阶段）
+	void transition_image_layout(vk::Image image, vk::ImageLayout old_layout, vk::ImageLayout new_layout, vk::AccessFlags2 src_access_mask, vk::AccessFlags2 dst_access_mask, vk::PipelineStageFlags2 src_stage_mask, vk::PipelineStageFlags2 dst_stage_mask, vk::ImageAspectFlags image_aspect_flags)        // 图像，原布局，目标布局，访问标志(前)，访问标志(后)，管线阶段(前），管线阶段(后)
 	{
-		// 图像内存屏障
+		// 图像内存屏障（屏障中，执行图像布局转换操作）
 		vk::ImageMemoryBarrier2 barrier = {
-		    .srcStageMask        = src_stage_mask,                 // 屏障执行前，必须完成的流水线阶段（屏障之中，执行图像的布局转换操作）
-		    .srcAccessMask       = src_access_mask,                // 屏障执行前，等源流水线阶段完成后，将其缓存中需要同步的数据类型写入显存（确保可见性）
-		    .dstStageMask        = dst_stage_mask,                 // 屏障执行后，才能开始的流水线阶段（阻塞）
-		    .dstAccessMask       = dst_access_mask,                // 屏障执行后，目标流水线阶段缓存中的需要同步的数据设置为过期（着色器使用缓存数据时，发现数据过期会自动去显存拉取最新数据，从而完成数据同步）
-		    .oldLayout           = old_layout,                     // 图像当前内存布局（内存布局就是图像像素的物理排列方式，知道内存布局才知道（x，y）对应的内存地址在哪）
-		    .newLayout           = new_layout,                     // 图像转换后的内存布局
-		    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,        // 源队列族索引（此处由于是在同一队列族内同步，所以不需要考虑图像所有权在不同队列族间的转移）（对于独占模式的图像，同一时间只能为一个队列族所占有，仅占有它的队列族才能读写，所以此处需要交接图像的所有权）
-		    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,        // 目标队列族索引
-		    .image               = image,                          // 需要同步的图像
-		    .subresourceRange    =                                 // 图像的哪些部分需要同步
-		    {
-		        .aspectMask     = image_aspect_flags,        // 图像的哪些通道需要同步
-		        .baseMipLevel   = 0,                         // Mipmap 起始层（需要同步的 Mapmap 层级范围）
-		        .levelCount     = 1,                         // 从起点开始，连续选中多少层 Mipmap
-		        .baseArrayLayer = 0,                         // 纹理数组起始层（需要同步的纹理数组范围）
-		        .layerCount     = 1                          // 从起点开始，连续选中多少层纹理
-		    }};
-
-		vk::DependencyInfo dependency_info = {
-		    .dependencyFlags         = {},             // 默认是全局依赖（需要等待源阶段将整个图像要同步的数据处理完），也可以选区域性依赖（移动端优化，只要源阶段将图形某位置处理完了，目标阶段就可以立即处理这个位置，无需等待源阶段将所有位置处理完）
-		    .imageMemoryBarrierCount = 1,              // 图像内存屏障数量
-		    .pImageMemoryBarriers    = &barrier        // 图像内存屏障（数组）起始地址
+		    .srcStageMask        = src_stage_mask,                 // 屏障执行前，必须完成的管线阶段
+		    .srcAccessMask       = src_access_mask,                // 屏障执行前，管线阶段中必须同步缓存的操作（缓存刷出）
+		    .dstStageMask        = dst_stage_mask,                 // 屏障执行后，才能开始的管线阶段
+		    .dstAccessMask       = dst_access_mask,                // 屏障执行后，管线阶段中必须同步缓冲的操作（缓存失效）
+		    .oldLayout           = old_layout,                     // 原布局
+		    .newLayout           = new_layout,                     // 新布局
+		    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,        // 原队列族（所有权转移，这里无）
+		    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,        // 目标队列族
+		    .image               = image,                          // 图像
+		    .subresourceRange =
+		        {.aspectMask = image_aspect_flags, .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1}        // 子资源范围（图像层面，Mipmap，图像数组）
 		};
 
-		commandBuffers[frameIndex].pipelineBarrier2(dependency_info);        // 录制屏障指令
+		// 依赖信息
+		vk::DependencyInfo dependency_info = {
+		    .dependencyFlags         = {},        // 依赖标志（全局依赖(默认)：源阶段->目标阶段(全屏等待)；区域依赖：源阶段->目标阶段(图块等待)，片上缓存优化）
+		    .imageMemoryBarrierCount = 1,
+		    .pImageMemoryBarriers    = &barrier        // 图像内存屏障
+		};
+
+		// 录制屏障指令
+		commandBuffers[frameIndex].pipelineBarrier2(dependency_info);
 	}
 
-	// 创建每帧的同步对象（信号量是跨队列同步，管线屏障是同队列的不同命令的同步，栅栏是 CPU 与 GPU 同步）
+	// 创建同步对象（栅栏->CPU/GPU 同步，信号量->提交同步(同/不同队列)，管线屏障->命令同步(同队列））
 	void createSyncObjects()
 	{
 		assert(presentCompleteSemphores.empty() && renderFinishedSemphores.empty() && inFlightFences.empty());
 
-		for (size_t i = 0; i < swapChainImages.size(); i++)        // 为每个交换链图像创建一个渲染完成信号量
+		// 每图像
+		for (size_t i = 0; i < swapChainImages.size(); i++)        // 图像渲染完成（信号量）
 		{
-			renderFinishedSemphores.emplace_back(device, vk::SemaphoreCreateInfo());        // 某图像，已渲染完且可被显示信号（二值信号量）
+			renderFinishedSemphores.emplace_back(device, vk::SemaphoreCreateInfo());
 		}
 
-		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)        // 为每一帧创建同步对象
+		// 每帧
+		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 		{
-			presentCompleteSemphores.emplace_back(device, vk::SemaphoreCreateInfo());        // 某工作帧，图像获取完成信号（二值信号量）
-
-			inFlightFences.emplace_back(device, vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});        // 某工作帧，所有工作完成标志（初始栅栏必须是已触发状态，否则会导致第一帧死锁）
+			presentCompleteSemphores.emplace_back(device, vk::SemaphoreCreateInfo());                                     // 图像获取完成（信号量）
+			inFlightFences.emplace_back(device, vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});        // 帧工作完成（栅栏）（初始为已触发，否则第一帧会死锁）
 		}
 	}
 
