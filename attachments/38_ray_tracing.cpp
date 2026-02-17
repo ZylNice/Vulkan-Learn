@@ -111,7 +111,7 @@ struct PushConstant
 #endif
 };
 
-class HelloTriangleApplication
+class VulkanRaytracingApplication
 {
   public:
 	void run()
@@ -138,10 +138,10 @@ class HelloTriangleApplication
 
 	// 交换链
 	vk::raii::SwapchainKHR           swapChain = nullptr;
-	std::vector<vk::Image>           swapChainImages;               // 图像
-	vk::SurfaceFormatKHR             swapChainSurfaceFormat;        // 图像格式
-	vk::Extent2D                     swapChainExtent;               // 图像尺寸
-	std::vector<vk::raii::ImageView> swapChainImageViews;           // 图像视图（图形管线通过它，访问交换链图像）
+	std::vector<vk::Image>           swapChainImages;                                      // 图像
+	vk::Format                       swapChainImageFormat = vk::Format::eUndefined;        // 图像格式
+	vk::Extent2D                     swapChainExtent;                                      // 图像尺寸
+	std::vector<vk::raii::ImageView> swapChainImageViews;                                  // 图像视图（图形管线通过它，访问交换链图像）
 
 	// 管线
 	vk::raii::DescriptorSetLayout descriptorSetLayoutGlobal   = nullptr;        // 通用接口，所有物体存入的相机数据相同
@@ -265,7 +265,7 @@ class HelloTriangleApplication
 	// 窗口大小改变的回调
 	static void framebufferResizeCallback(GLFWwindow *window, int width, int height)
 	{
-		auto app                = reinterpret_cast<HelloTriangleApplication *>(glfwGetWindowUserPointer(window));        // 从 window 中取出当前类对象指针
+		auto app                = reinterpret_cast<VulkanRaytracingApplication *>(glfwGetWindowUserPointer(window));        // 从 window 中取出当前类对象指针
 		app->framebufferResized = true;
 	}
 
@@ -585,16 +585,16 @@ class HelloTriangleApplication
 	{
 		auto surfaceCapabilities = physicalDevice.getSurfaceCapabilitiesKHR(*surface);        // 获取窗口表面能力
 
-		swapChainExtent        = chooseSwapExtent(surfaceCapabilities);                                         // 选择格式
-		swapChainSurfaceFormat = chooseSwapSurfaceFormat(physicalDevice.getSurfaceFormatsKHR(*surface));        // 选择分辨率
-		auto minImageCount     = std::max(3u, surfaceCapabilities.minImageCount);                               // 三缓冲
-		minImageCount          = (surfaceCapabilities.maxImageCount > 0 && minImageCount > surfaceCapabilities.maxImageCount) ? surfaceCapabilities.maxImageCount : minImageCount;
+		swapChainImageFormat = chooseSwapSurfaceFormat(physicalDevice.getSurfaceFormatsKHR(*surface));        // 选择格式
+		swapChainExtent      = chooseSwapExtent(surfaceCapabilities);                                         // 选择分辨率
+		auto minImageCount   = std::max(3u, surfaceCapabilities.minImageCount);                               // 三缓冲
+		minImageCount        = (surfaceCapabilities.maxImageCount > 0 && minImageCount > surfaceCapabilities.maxImageCount) ? surfaceCapabilities.maxImageCount : minImageCount;
 
 		vk::SwapchainCreateInfoKHR swapChainCreateInfo{
 		    .surface          = *surface,                                                                         // 抽象窗口
 		    .minImageCount    = minImageCount,                                                                    // 图像数量（vulkan 规定，至少为 2（双缓冲））
-		    .imageFormat      = swapChainSurfaceFormat.format,                                                    // 图像格式
-		    .imageColorSpace  = swapChainSurfaceFormat.colorSpace,                                                // 色彩空间
+		    .imageFormat      = swapChainImageFormat,                                                             // 图像格式
+		    .imageColorSpace  = vk::ColorSpaceKHR::eSrgbNonlinear,                                                // 色彩空间
 		    .imageExtent      = swapChainExtent,                                                                  // 图像尺寸
 		    .imageArrayLayers = 1,                                                                                // 数组层数（每图像）
 		    .imageUsage       = vk::ImageUsageFlagBits::eColorAttachment,                                         // 颜色附件（用途，管线将其作为渲染目标）
@@ -614,7 +614,7 @@ class HelloTriangleApplication
 	{
 		vk::ImageViewCreateInfo imageViewCreateInfo{
 		    .viewType         = vk::ImageViewType::e2D,
-		    .format           = swapChainSurfaceFormat.format,
+		    .format           = swapChainImageFormat,
 		    .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};        // 访问颜色层面，具体通道由 format 决定
 		for (auto &image : swapChainImages)
 		{
@@ -663,7 +663,7 @@ class HelloTriangleApplication
 	// 创建图形管线
 	void createGraphicsPipeline()
 	{
-		vk::raii::ShaderModule shaderModule = createShaderModule(readFile("shaders/slang.spv"));
+		vk::raii::ShaderModule shaderModule = createShaderModule(readFile("shaders/slang.spv"));        // Slang 编译后的 SPIR-V 字节码
 
 		// 着色器阶段（顶点 + 片元）
 		vk::PipelineShaderStageCreateInfo vertShaderStageInfo{.stage = vk::ShaderStageFlagBits::eVertex, .module = shaderModule, .pName = "vertMain"};
@@ -774,8 +774,8 @@ class HelloTriangleApplication
 		    // 动态渲染配置
 		    {
 		        .colorAttachmentCount    = 1,
-		        .pColorAttachmentFormats = &swapChainSurfaceFormat.format,        // 颜色附件格式
-		        .depthAttachmentFormat   = depthFormat                            // 深度附件格式
+		        .pColorAttachmentFormats = &swapChainImageFormat,        // 颜色附件格式
+		        .depthAttachmentFormat   = depthFormat                   // 深度附件格式
 		    }};
 
 		graphicsPipeline = vk::raii::Pipeline(device, nullptr, pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>());
@@ -797,8 +797,8 @@ class HelloTriangleApplication
 		vk::Format depthFormat = findDepthFormat();        // 深度格式
 		createImage(swapChainExtent.width, swapChainExtent.height, depthFormat,
 		            vk::ImageTiling::eOptimal, vk::ImageUsageFlagBits::eDepthStencilAttachment,
-		            vk::MemoryPropertyFlagBits::eDeviceLocal, depthImage, depthImageMemory);                  // 创建深度图像
-		depthImageView = createImageView(depthImage, depthFormat, vk::ImageAspectFlagBits::eDepth, 1);        // 创建深度图像视图
+		            vk::MemoryPropertyFlagBits::eDeviceLocal, depthImage, depthImageMemory);               // 创建深度图像
+		depthImageView = createImageView(depthImage, depthFormat, vk::ImageAspectFlagBits::eDepth);        // 创建深度图像视图
 	}
 
 	// 辅助函数：选取深度格式（候选格式，平铺模式要求，特性要求）
@@ -909,14 +909,13 @@ class HelloTriangleApplication
 	}
 
 	// 辅助函数：创建图像
-	void createImage(uint32_t width, uint32_t height, uint32_t mipLevels, vk::Format format, vk::ImageTiling tiling,                                    // 宽，高，Mipmap 数，格式，内存排列
-	                 vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties, vk::raii::Image &image, vk::raii::DeviceMemory &imageMemory)        // 用途，内存属性，传出参数（图像+内存）
+	void createImage(uint32_t width, uint32_t height, vk::Format format, vk::ImageTiling tiling, vk::ImageUsageFlags usage, vk::MemoryPropertyFlags properties, vk::raii::Image &image, vk::raii::DeviceMemory &imageMemory)        // 宽，高，Mipmap 数，格式，内存排列，用途，内存属性，传出参数（图像+内存）
 	{
 		vk::ImageCreateInfo imageInfo{
 		    .imageType   = vk::ImageType::e2D,                 // 图像类型（1D/2D/3D）
 		    .format      = format,                             // 像素格式（颜色通道的排列、大小、数据类型）
 		    .extent      = {width, height, 1},                 // 图像尺寸（宽，高，深）（2D 图深度为 1）
-		    .mipLevels   = mipLevels,                          // MIP 级数
+		    .mipLevels   = 1,                                  // MIP 级数
 		    .arrayLayers = 1,                                  // 数组层数
 		    .samples     = vk::SampleCountFlagBits::e1,        // MSAA 采样数
 		    .tiling      = tiling,                             // 内存排列（eLinear：行主序排列，CPU 可读写，GPU 性能差）（eOptimal：GPU 分块优化排列，CPU 无法读写，GPU 性能最佳）(图像创建后不可更改）
@@ -932,7 +931,7 @@ class HelloTriangleApplication
 		                                 .memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits, properties)};
 		imageMemory = vk::raii::DeviceMemory(device, allocInfo);
 
-		image.bindMemory(imageMemory, 0);        // 图像句柄绑定内存（从该内存的 0 字节开始绑定）
+		image.bindMemory(imageMemory, 0);        // 图像句柄绑定内存（内存，内存偏移量(字节)）
 	}
 
 	// 辅助函数：图像布局转换（预处理阶段）
@@ -1295,7 +1294,7 @@ class HelloTriangleApplication
 			    .pGeometries   = &blasGeometry,        // 几何体
 			};
 
-			// 暂存缓冲区（大小 == 构建所需内存）（存放构建时的临时数据）
+			// 草稿缓冲区（大小 == 构建所需内存）（存放构建时的临时数据）
 			auto primitiveCount = static_cast<uint32_t>(submesh.indexCount / 3);        // 三角形数量
 
 			vk::AccelerationStructureBuildSizesInfoKHR blasBuildSizes =        // 构建所需内存（BLAS）
@@ -1305,13 +1304,13 @@ class HelloTriangleApplication
 			        {primitiveCount}        // 图元数量
 			    );
 
-			// 暂存缓冲区（创建）
+			// 草稿缓冲区（创建）
 			vk::raii::Buffer       scratchBuffer = nullptr;
 			vk::raii::DeviceMemory scratchMemory = nullptr;
 			createBuffer(blasBuildSizes.buildScratchSize, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,        // SSBO，GPU 地址（虚拟）
 			             vk::MemoryPropertyFlagBits::eDeviceLocal, scratchBuffer, scratchMemory);
 
-			// 暂存缓冲区（GPU 地址填入构建信息）
+			// 草稿缓冲区（GPU 地址填入构建信息）
 			vk::BufferDeviceAddressInfo scratchAddressInfo{.buffer = *scratchBuffer};
 			vk::DeviceAddress           scratchAddr         = device.getBufferAddressKHR(scratchAddressInfo);        // 暂存缓冲区 GPU 地址（虚拟）
 			blasBuildGeometryInfo.scratchData.deviceAddress = scratchAddr;                                           // 将暂存缓冲区地址，填入构建信息
@@ -1403,7 +1402,7 @@ class HelloTriangleApplication
 		tlasBuildGeometryInfo.flags = vk::BuildAccelerationStructureFlagBitsKHR::eAllowUpdate;        // 允许更新（动画）
 #	endif
 
-		// 暂存缓冲区（大小 == 构建所需内存）
+		// 草稿缓冲区（大小 == 构建所需内存）
 		auto primitiveCount = static_cast<uint32_t>(instances.size());        // 图元数量 = 实例数量
 
 		vk::AccelerationStructureBuildSizesInfoKHR tlasBuildSizes =
@@ -1413,11 +1412,11 @@ class HelloTriangleApplication
 		        {primitiveCount}        // 图元数量
 		    );
 
-		// 暂存缓冲区（创建）
+		// 草稿缓冲区（创建）
 		createBuffer(tlasBuildSizes.buildScratchSize, vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eStorageBuffer | vk::BufferUsageFlagBits::eShaderDeviceAddress,
 		             vk::MemoryPropertyFlagBits::eDeviceLocal, tlasScratchBuffer, tlasScratchMemory);
 
-		// 暂存缓冲区（GPU 地址填入构建信息）
+		// 草稿缓冲区（GPU 地址填入构建信息）
 		vk::BufferDeviceAddressInfo scratchAddressInfo{.buffer = *tlasScratchBuffer};
 		vk::DeviceAddress           scratchAddr         = device.getBufferAddressKHR(scratchAddressInfo);
 		tlasBuildGeometryInfo.scratchData.deviceAddress = scratchAddr;
@@ -1768,7 +1767,7 @@ class HelloTriangleApplication
 		commandBuffers[frameIndex].pipelineBarrier2(dependency_info);
 	}
 
-	// 创建同步对象（栅栏->CPU/GPU 同步，信号量->提交同步(同/不同队列)，管线屏障->命令同步(同队列））
+	// 创建同步对象（栅栏->CPU/GPU 同步，信号量->提交同步(同/不同队列)，管线屏障->命令同步(同提交））
 	void createSyncObjects()
 	{
 		assert(presentCompleteSemphores.empty() && renderFinishedSemphores.empty() && inFlightFences.empty());
@@ -1790,36 +1789,118 @@ class HelloTriangleApplication
 	// 更新 UBO
 	void updateUniformBuffer(uint32_t currentImage)
 	{
-		static auto startTime = std::chrono::high_resolution_clock::now();        // 静态变量记录开始时间
+		static auto startTime = std::chrono::high_resolution_clock::now();        // 开始时间（静态变量）
 
 		auto  currentTime = std::chrono::high_resolution_clock::now();
-		float time        = std::chrono::duration<float>(currentTime - startTime).count();        // 计算经过的时间
+		float time        = std::chrono::duration<float>(currentTime - startTime).count();        // 经过时间
+
+		auto eye = glm::vec3(2.0f, 2.0f, 2.0f);        // 相机位置
 
 		UniformBufferObject ubo{};
-		ubo.model = rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));                                                                  // 模型矩阵，随时间绕 Z 轴旋转
-		ubo.view  = lookAt(glm::vec3(2.0f, 2.0f, 2.0f), glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));                                                     // 视图矩阵，摄像机位置 (2,2,2)，看向原点 (0,0,0)，上方向为 Z 轴
-		ubo.proj  = glm::perspective(glm::radians(45.0f), static_cast<float>(swapChainExtent.width) / static_cast<float>(swapChainExtent.height), 0.1f, 10.0f);        // 投影矩阵，fov，宽高比，近平面，远平面
-		ubo.proj[1][1] *= -1;                                                                                                                                          // 翻转 Y 轴，GLM 是为 OpenGL 设计的（Y 轴向上），而 Vulkan 的 Clip Space Y 轴向下
+		ubo.model = rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));                                                                  // 模型（绕 Z 旋转)
+		ubo.view  = lookAt(eye, glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));                                                                             // 视图（相机位置，看向位置，相机上方）
+		ubo.proj  = glm::perspective(glm::radians(45.0f), static_cast<float>(swapChainExtent.width) / static_cast<float>(swapChainExtent.height), 0.1f, 10.0f);        // 投影（fov，宽高比，近平面，远平面）
+		ubo.proj[1][1] *= -1;                                                                                                                                          // 翻转 Y 轴（Vulkan 坐标原点左上角，Y 轴向下；OpenGL 坐标原点左下角，Y 轴向上）
+		ubo.cameraPos = eye;
 
-		memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));        // 更新（GPU 可见）特殊 CPU 内存中的 UBO
+		memcpy(uniformBuffersMapped[currentImage], &ubo, sizeof(ubo));        // 更新 UBO
 	}
+
+#if LAB_TASK_LEVEL >= LAB_TASK_AS_ANIMATION
+	// 更新 TLAS（动画）
+	void updateTopLevelAS(const glm::mat4 &model)
+	{
+		// 仿射变换（3x4）
+		vk::TransformMatrixKHR tm{};
+		auto                  &M = model;
+		tm.matrix                = std::array<std::array<float, 4>, 3>{{
+            std::array<float, 4>{M[0][0], M[1][0], M[2][0], M[3][0]},
+            std::array<float, 4>{M[0][1], M[1][1], M[2][1], M[3][1]},
+            std::array<float, 4>{M[0][2], M[1][2], M[2][2], M[3][2]},
+        }};
+
+		// 更新实例（CPU）
+		for (auto &instance : instances)
+		{
+			instance.setTransform(tm);
+		}
+
+		// 暂存缓冲区（大小）
+		auto           primitiveCount = static_cast<uint32_t>(instances.size());
+		vk::DeviceSize instBufferSize = sizeof(instances[0]) * primitiveCount;
+
+		// 暂存缓冲区（创建）
+		vk::raii::Buffer       stagingBuffer({});
+		vk::raii::DeviceMemory stagingBufferMemory({});
+		createBuffer(instBufferSize, vk::BufferUsageFlagBits::eTransferSrc, vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent, stagingBuffer, stagingBufferMemory);
+
+		// 暂存缓冲区（拷贝）
+		void *dataStaging = stagingBufferMemory.mapMemory(0, instBufferSize);
+		memcpy(dataStaging, instances.data(), instBufferSize);
+		stagingBufferMemory.unmapMemory();
+
+		// 更新实例（GPU）
+		copyBuffer(stagingBuffer, instanceBuffer, instBufferSize);
+
+		vk::BufferDeviceAddressInfo instanceAddrInfo{.buffer = instanceBuffer};
+		vk::DeviceAddress           instanceAddr = device.getBufferAddressKHR(instanceAddrInfo);
+
+		// 几何体描述（实例）
+		auto instancesData = vk::AccelerationStructureGeometryInstancesDataKHR{.arrayOfPointers = vk::False, .data = instanceAddr};
+
+		// 几何体描述（标准）
+		vk::AccelerationStructureGeometryDataKHR geometryData(instancesData);
+
+		// 几何体描述（TLAS）
+		vk::AccelerationStructureGeometryKHR tlasGeometry{.geometryType = vk::GeometryTypeKHR::eInstances, .geometry = geometryData};
+
+		// 构建信息（TLAS）
+		vk::AccelerationStructureBuildGeometryInfoKHR tlasBuildGeometryInfo{
+		    .type                     = vk::AccelerationStructureTypeKHR::eTopLevel,
+		    .flags                    = vk::BuildAccelerationStructureFlagBitsKHR::eAllowUpdate,
+		    .mode                     = vk::BuildAccelerationStructureModeKHR::eUpdate,
+		    .srcAccelerationStructure = tlas,        // 源 TLAS
+		    .dstAccelerationStructure = tlas,        // 目标 TLAS
+		    .geometryCount            = 1,
+		    .pGeometries              = &tlasGeometry};
+
+		// 草稿缓冲区（GPU 地址）
+		vk::BufferDeviceAddressInfo scratchAddressInfo{.buffer = *tlasScratchBuffer};
+		vk::DeviceAddress           scratchAddr         = device.getBufferAddressKHR(scratchAddressInfo);
+		tlasBuildGeometryInfo.scratchData.deviceAddress = scratchAddr;        // GPU 地址填入构建信息
+
+		// 构建范围
+		vk::AccelerationStructureBuildRangeInfoKHR tlasRangeInfo{.primitiveCount = primitiveCount, .primitiveOffset = 0, .firstVertex = 0, .transformOffset = 0};        // 实例数量，偏移(实例)，偏移(顶点)，偏移(变换矩阵)
+
+		// 全局内存屏障
+		auto cmd = beginSingleTimeCommands();
+
+		vk::MemoryBarrier preBarrier{
+		    .srcAccessMask = vk::AccessFlagBits::eAccelerationStructureWriteKHR | vk::AccessFlagBits::eTransferWrite | vk::AccessFlagBits::eShaderRead,
+		    .dstAccessMask = vk::AccessFlagBits::eAccelerationStructureReadKHR | vk::AccessFlagBits::eAccelerationStructureWriteKHR};
+
+		cmd->pipelineBarrier(
+		    vk::PipelineStageFlagBits::eAccelerationStructureBuildKHR | vk::PipelineStageFlagBits::eTransfer | vk::PipelineStageFlagBits::eFragmentShader,
+		    vk::PipelineStageFlagBits::eAccelerationStructureBuildKHR,
+		    {}, preBarrier, {}, {}        // 依赖标志，全局内存屏障，缓冲区内存屏障，图像内存屏障
+		);
+
+		endSingleTimeCommands(*cmd);
+	}
+#endif
 
 	// 绘制帧
 	void drawFrame()
 	{
-		auto fenceResult = device.waitForFences(*inFlightFences[frameIndex], vk::True, UINT64_MAX);        // 确保当前工作帧的上一帧的所有 GPU 工作已完成（不代表渲染结果已经被呈现）
+		// 等待当前帧上一轮工作完成（图像渲染完成，不代表呈现完成）
+		auto fenceResult = device.waitForFences(*inFlightFences[frameIndex], vk::True, UINT64_MAX);
 		if (fenceResult != vk::Result::eSuccess)
 		{
 			throw std::runtime_error("failed to wait for fence!");
 		}
 
-		device.resetFences(*inFlightFences[frameIndex]);        // 手动将栅栏重置为 Unsignaled 状态（表示当前帧工作处于未完成状态）
-
-		auto [result, imageIndex] = swapChain.acquireNextImage(        // 向交换链请求一张空闲的画布（非空闲的画布可能被 GPU 或显示器占用，有可能正在绘制或显示）
-		    UINT64_MAX,                                                // 等待时间（此处表示等待时间无限长）（三缓冲+邮箱：本质是非阻塞调用，传统垂直同步：画满了后会阻塞）
-		    *presentCompleteSemphores[frameIndex],                     // 异步操作，返回后，当图片真正可用时触发信号量（返回时逻辑上交割完毕，还需等待硬件上的交割完毕）
-		    nullptr                                                    // 可填写栅栏，让 CPU 也感知到图片准备好了
-		);
+		// 向交换链请求图像
+		auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemphores[frameIndex], nullptr);        // 等待时间，图像可用(信号量)，图像可用(栅栏)
 		if (result == vk::Result::eErrorOutOfDateKHR)
 		{
 			recreateSwapChain();
@@ -1827,146 +1908,137 @@ class HelloTriangleApplication
 		}
 		if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR)
 		{
+			assert(result == vk::Result::eTimeout || result == vk::Result::eNotReady);
 			throw std::runtime_error("failed to acquire swap chain image!");
 		}
-		updateUniformBuffer(frameIndex);        // 更新 UBO 缓冲区
+		updateUniformBuffer(frameIndex);        // 更新 UBO
 
-		commandBuffers[frameIndex].reset();
-		recordCommandBuffer(imageIndex);        // 转为写入布局-绑定渲染目标--绘制图形-转为呈现布局
+#if LAB_TASK_LEVEL >= LAB_TASK_AS_ANIMATION
+		updateTopLevelAS(ubo.model);        // 更新 TLAS（动画）
+#endif
 
-		vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+		device.resetFences(*inFlightFences[frameIndex]);        // 重置栅栏（未触发）（当前帧工作开始，现处于未完成状态）
 
+		commandBuffers[frameIndex].reset();        // 重置命令缓冲
+		recordCommandBuffer(imageIndex);           // 录制命令缓冲（图像布局转换->渲染->图像布局转换）
+
+		vk::PipelineStageFlags waitDestinationStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput);        // 等待阶段（信号量）
+
+		// 提交命令缓冲
 		const vk::SubmitInfo submitInfo{
 		    .waitSemaphoreCount   = 1,
-		    .pWaitSemaphores      = &*presentCompleteSemphores[frameIndex],        // GPU 在等待哪个信号量被触发（此处为 presentCompleteSemphore）
-		    .pWaitDstStageMask    = &waitDestinationStageMask,                     // GPU 在哪个流水线阶段等待（此处 GPU 可以执行顶点着色器、片元输出颜色计算，但颜色输出阶段必须停下来等待信号量被触发）
+		    .pWaitSemaphores      = &*presentCompleteSemphores[frameIndex],        // 等待信号量（提交命令执行前，该信号量必须被触发）（图像可用）
+		    .pWaitDstStageMask    = &waitDestinationStageMask,                     // 等待阶段（等待信号量触发后，才能执行的管线阶段）（该阶段之前可以正常执行）
 		    .commandBufferCount   = 1,
-		    .pCommandBuffers      = &*commandBuffers[frameIndex],        // GPU 执行哪个命令缓冲区的命令
+		    .pCommandBuffers      = &*commandBuffers[frameIndex],        // 命令缓冲
 		    .signalSemaphoreCount = 1,
-		    .pSignalSemaphores    = &*renderFinishedSemphores[imageIndex]};        // GPU 执行完命令后，触发哪个信号量（GPU）
+		    .pSignalSemaphores    = &*renderFinishedSemphores[imageIndex]        // 触发信号量（图像渲染完成）
+		};
 
-		queue.submit(submitInfo, *inFlightFences[frameIndex]);        // 提交命令，GPU 执行完毕后触发信号量（CPU）
+		graphicsQueue.submit(submitInfo, *inFlightFences[frameIndex]);        // 提交命令缓冲（提交信息，栅栏(提交命令执行后，该栅栏被触发)）
 
-		try
+		// 请求显示
+		const vk::PresentInfoKHR presentInfoKHR{
+		    .waitSemaphoreCount = 1,
+		    .pWaitSemaphores    = &*renderFinishedSemphores[imageIndex],        // 等待信号量（显示前，该信号量必须被触发）(渲染完成）
+		    .swapchainCount     = 1,
+		    .pSwapchains        = &*swapChain,
+		    .pImageIndices      = &imageIndex        // 图像索引（交换链中）
+		};
+
+		result = presentQueue.presentKHR(presentInfoKHR);
+
+		if (result == vk::Result::eSuboptimalKHR || framebufferResized)        // 交换链次优(交换链可用，但与窗口不完全匹配) || 窗口大小改变
 		{
-			const vk::PresentInfoKHR presentInfoKHR{
-			    .waitSemaphoreCount = 1,
-			    .pWaitSemaphores    = &*renderFinishedSemphores[imageIndex],        // 等待该信号量被触发（渲染完成）
-			    .swapchainCount     = 1,
-			    .pSwapchains        = &*swapChain,
-			    .pImageIndices      = &imageIndex};        // 要展示的图片
-			result = queue.presentKHR(presentInfoKHR);
-			if (result == vk::Result::eSuboptimalKHR || framebufferResized)        // eSuboptimalKHR 表示交换链能用，但和当前窗口不完全匹配（如分辨率不同，但可拉伸），
-			                                                                       // framebufferResized，在某些驱动上，改变窗口大小时可能仍返回 eSuccess，因为驱动通过自动缩放交换链图像以适应窗口尺寸
-			{
-				framebufferResized = false;
-				recreateSwapChain();
-			}
-			else if (result != vk::Result::eSuccess)
-			{
-				throw std::runtime_error("failed to present swap chain image!");
-			}
+			framebufferResized = false;
+			recreateSwapChain();
 		}
-		catch (const vk::SystemError &e)
+		else
 		{
-			if (e.code().value() == static_cast<int>(vk::Result::eErrorOutOfDateKHR))        // 交换链彻底失效，需要重建
-			{
-				recreateSwapChain();
-				return;
-			}
-			else
-			{
-				throw;
-			}
+			assert(result != vk::Result::eSuccess);
 		}
-		frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;
+
+		frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;        // 更新帧索引
 	}
 
+	// 加载着色器模块
 	[[nodiscard]] vk::raii::ShaderModule createShaderModule(const std::vector<char> &code) const
 	{
-		vk::ShaderModuleCreateInfo createInfo{
-		    .codeSize = code.size() * sizeof(char),
-		    .pCode    = reinterpret_cast<const uint32_t *>(code.data())};
-		vk::raii::ShaderModule shaderModule{device, createInfo};
-
+		vk::ShaderModuleCreateInfo createInfo{.codeSize = code.size() * sizeof(char), .pCode = reinterpret_cast<const uint32_t *>(code.data())};        // Slang 编译后的 SPIR-V 字节码（SPIR-V 文件大小必须是 4 的倍数）
+		vk::raii::ShaderModule     shaderModule{device, createInfo};                                                                                    // 创建着色器模块
 		return shaderModule;
 	}
 
-	// 辅助函数，选择 Surface 格式
-	static vk::SurfaceFormatKHR chooseSwapSurfaceFormat(std::vector<vk::SurfaceFormatKHR> const &availableFormats)
+	// 辅助函数：选择表面格式（交换链）
+	static vk::Format chooseSwapSurfaceFormat(std::vector<vk::SurfaceFormatKHR> const &availableFormats)
 	{
-		assert(!availableFormats.empty());
-
-		const auto formatIt = std::ranges::find_if(
-		    availableFormats,
-		    [](const auto &format) {
-			    return format.format == vk::Format::eB8G8R8A8Srgb && format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;        // eB8G8R8A8Srgb（GPU 内部） : Shader 输出颜色时 GPU 自动做 x^{1/2.2} 编码，Texture Sampler 采样时 GPU 自动做 x^{2.2} 解码
-		    });                                                                                                                     // eSrgbNonlinear 显示器怎么解释这个显存数据（色域不同）
-
-		return formatIt != availableFormats.end() ? *formatIt : availableFormats[0];
+		const auto formatIt = std::ranges::find_if(availableFormats, [](const auto &format) {
+			return format.format == vk::Format::eB8G8R8A8Srgb && format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;        // 像素格式(Srgb(硬件自动)：采样纹理：sRGB->Linear；写入：Linear->sRGB)，颜色空间
+		});
+		return formatIt != availableFormats.end() ? formatIt->format : availableFormats[0].format;
 	}
 
-	// 辅助函数，选择呈现模式
+	// 辅助函数：选择呈现模式（交换链）
 	static vk::PresentModeKHR chooseSwapPresentMode(const std::vector<vk::PresentModeKHR> &availablePresentModes)
 	{
-		assert(std::ranges::any_of(availablePresentModes, [](auto presentMode) { return presentMode == vk::PresentModeKHR::eFifo; }));
+		bool hasMailbox = std::ranges::any_of(availablePresentModes, [](const vk::PresentModeKHR value) { return vk::PresentModeKHR::eMailbox == value; });
 
-		return std::ranges::any_of(availablePresentModes, [](const vk::PresentModeKHR value) { return vk::PresentModeKHR::eMailbox == value; }) ?
-		           vk::PresentModeKHR::eMailbox :        // 首选 Mailbox
-		           vk::PresentModeKHR::eFifo;            // 垂直同步
+		return hasMailbox ? vk::PresentModeKHR::eMailbox : vk::PresentModeKHR::eFifo;        // Vulkan 规定，显卡驱动必须支持 FIFO 模式
 	}
 
-	// 辅助函数，选择 Swap Extent
+	// 辅助函数：选择图像尺寸（交换链）
 	vk::Extent2D chooseSwapExtent(const vk::SurfaceCapabilitiesKHR &capabilities)
 	{
-		if (capabilities.currentExtent.width != 0xFFFFFFFF)        // 驱动是否写死了窗口大小
+		if (capabilities.currentExtent.width != 0xFFFFFFFF)        // 窗口大小固定（不可改变）
 		{
-			return capabilities.currentExtent;        // 驱动写死了窗口大小
+			return capabilities.currentExtent;
 		}
 
 		int width, height;
-		glfwGetFramebufferSize(window, &width, &height);        // 询问显示器要渲染的图像大小，由于显示器的缩放，glCreateWindow 的宽高参数会被缩放，缩放后才是真实要渲染的图像大小
+		glfwGetFramebufferSize(window, &width, &height);        // 窗口实际大小（显示器 DPI 缩放）
 
-		return {// 确保图像分辨率在显卡支持的范围内
-		        std::clamp<uint32_t>(width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
+		// 确保图像分辨率在显卡支持的范围内
+		return {std::clamp<uint32_t>(width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
 		        std::clamp<uint32_t>(height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height)};
 	}
 
+	// 辅助函数：获取实例拓展（必需）
 	std::vector<const char *> getRequiredExtensions()
 	{
-		uint32_t glfwExtensionCount = 0;
-		auto     glfwExtensions     = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-
+		// 实例拓展（GLFW 所需）
+		uint32_t    glfwExtensionCount = 0;
+		auto        glfwExtensions     = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
 		std::vector extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
 
+		// 实例拓展（验证层）
 		if (enableValidationLayers)
 		{
-			extensions.push_back(vk::EXTDebugUtilsExtensionName);        // 允许注册验证层的回调函数
+			extensions.push_back(vk::EXTDebugUtilsExtensionName);        // 允许注册回调函数（接收验证层报错信息)
 		}
-
 		return extensions;
 	}
 
+	// 调试回调
 	static VKAPI_ATTR vk::Bool32 VKAPI_CALL debugCallback(vk::DebugUtilsMessageSeverityFlagBitsEXT severity, vk::DebugUtilsMessageTypeFlagsEXT type, const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData, void *)
 	{
 		if (severity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eError || severity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning)
 		{
 			std::cerr << "validation layer: type" << to_string(type) << " msg: " << pCallbackData->pMessage << std::endl;
 		}
-
 		return vk::False;
 	}
 
+	// 辅助函数：文件读取
 	static std::vector<char> readFile(const std::string &filename)
 	{
-		std::ifstream file(filename, std::ios::ate | std::ios::binary);        // 从文件末尾开始，以二进制格式读取
+		std::ifstream file(filename, std::ios::ate | std::ios::binary);        // 文件路径，定位文件末尾 | 二进制模式
 		if (!file.is_open())
 		{
 			throw std::runtime_error("failed to open file");
 		}
-		std::vector<char> buffer(file.tellg());                                       // 由于从文件末尾开始读，可以通过当前读指针确定缓冲区大小
-		file.seekg(0, std::ios::beg);                                                 // 回到文件开头
-		file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));        // 读文件所有数据
+		std::vector<char> buffer(file.tellg());                                       // 缓冲区（缓冲区大小 = 文件大小 = 文件末尾位置）
+		file.seekg(0, std::ios::beg);                                                 // 定位文件开头
+		file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));        // 读取文件所有数据
 		file.close();
 		return buffer;
 	}
@@ -1976,7 +2048,7 @@ int main()
 {
 	try
 	{
-		HelloTriangleApplication app;
+		VulkanRaytracingApplication app;
 		app.run();
 	}
 	catch (const std::exception &e)
