@@ -234,10 +234,10 @@ class VulkanRaytracingApplication
 	uint32_t                             graphicsIndex = ~0;           // 图形队列族索引
 
 	// 同步对象
-	std::vector<vk::raii::Semaphore> presentCompleteSemphores;        // 图像可用（信号）
-	std::vector<vk::raii::Semaphore> renderFinishedSemphores;         // 渲染完成（信号）
-	std::vector<vk::raii::Fence>     inFlightFences;                  // 上帧 GPU 工作完成（栅栏）
-	uint32_t                         frameIndex = 0;                  // 当前帧索引（0 或 1）
+	std::vector<vk::raii::Semaphore> presentCompleteSemaphores;        // 图像可用（信号）
+	std::vector<vk::raii::Semaphore> renderFinishedSemaphores;         // 渲染完成（信号）
+	std::vector<vk::raii::Fence>     inFlightFences;                   // 上帧 GPU 工作完成（栅栏）
+	uint32_t                         frameIndex = 0;                   // 当前帧索引（0 或 1）
 
 	bool framebufferResized = false;        // 窗口大小是否改变
 
@@ -868,6 +868,8 @@ class VulkanRaytracingApplication
 		transitionImageLayout(textureImage, vk::ImageLayout::eUndefined, vk::ImageLayout::eTransferDstOptimal);                    // 适合 GPU 拷贝
 		copyBufferToImage(stagingBuffer, textureImage, static_cast<uint32_t>(texWidth), static_cast<uint32_t>(texHeight));         // 拷贝
 		transitionImageLayout(textureImage, vk::ImageLayout::eTransferDstOptimal, vk::ImageLayout::eShaderReadOnlyOptimal);        // 适合 Shader 采样
+
+		return std::make_pair(std::move(textureImage), std::move(textureImageMemory));
 	}
 
 	// 创建纹理视图
@@ -1005,7 +1007,7 @@ class VulkanRaytracingApplication
 		std::vector<tinyobj::material_t> localMaterials;        // 材质
 		std::string                      warn, err;             // 警告/错误信息
 
-		if (!tinyobj::LoadObj(&attrib, &shapes, &localMaterials, &warn, &err, MODEL_PATH.c_str()))
+		if (!tinyobj::LoadObj(&attrib, &shapes, &localMaterials, &warn, &err, MODEL_PATH.c_str(), MODEL_PATH.substr(0, MODEL_PATH.find_last_of("/\\")).c_str()))        // OBJ 文件路径，材质文件目录
 		{
 			throw std::runtime_error(warn + err);
 		}
@@ -1702,8 +1704,8 @@ class VulkanRaytracingApplication
 		commandBuffer.bindVertexBuffers(0, *vertexBuffer, {0});                        // 顶点缓冲（顶点输入绑定点 0，偏移量）(顶点输入绑定点(location)，描述符绑定点(set, binding)，不同）
 		commandBuffer.bindIndexBuffer(*indexBuffer, 0, vk::IndexType::eUint32);        // 索引缓冲（偏移量，索引类型）（索引缓冲唯一，故无需绑定点）
 
-		commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, *globalDescriptorSets[frameIndex], nullptr);          // 全局描述符集（管线，管线布局，描述符集索引(管线布局)，描述符集数据源，动态偏移量）（动态偏移量：仅影响描述符集中的动态 UBO，使不同模型切换时无需切换描述符集，更改偏移量即可）
-		commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 1, *materialDescriptorSets[frameIndex], nullptr);        // 材质描述符集
+		commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 0, *globalDescriptorSets[frameIndex], nullptr);        // 全局描述符集（管线，管线布局，描述符集索引(管线布局)，描述符集数据源，动态偏移量）（动态偏移量：仅影响描述符集中的动态 UBO，使不同模型切换时无需切换描述符集，更改偏移量即可）
+		commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, pipelineLayout, 1, *materialDescriptorSets[0], nullptr);               // 材质描述符集
 
 		for (auto &sub : submeshes)
 		{
@@ -1770,18 +1772,18 @@ class VulkanRaytracingApplication
 	// 创建同步对象（栅栏->CPU/GPU 同步，信号量->提交同步(同/不同队列)，管线屏障->命令同步(同提交））
 	void createSyncObjects()
 	{
-		assert(presentCompleteSemphores.empty() && renderFinishedSemphores.empty() && inFlightFences.empty());
+		assert(presentCompleteSemaphores.empty() && renderFinishedSemaphores.empty() && inFlightFences.empty());
 
 		// 每图像
 		for (size_t i = 0; i < swapChainImages.size(); i++)        // 图像渲染完成（信号量）
 		{
-			renderFinishedSemphores.emplace_back(device, vk::SemaphoreCreateInfo());
+			renderFinishedSemaphores.emplace_back(device, vk::SemaphoreCreateInfo());
 		}
 
 		// 每帧
 		for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
 		{
-			presentCompleteSemphores.emplace_back(device, vk::SemaphoreCreateInfo());                                     // 图像获取完成（信号量）
+			presentCompleteSemaphores.emplace_back(device, vk::SemaphoreCreateInfo());                                    // 图像获取完成（信号量）
 			inFlightFences.emplace_back(device, vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});        // 帧工作完成（栅栏）（初始为已触发，否则第一帧会死锁）
 		}
 	}
@@ -1792,11 +1794,10 @@ class VulkanRaytracingApplication
 		static auto startTime = std::chrono::high_resolution_clock::now();        // 开始时间（静态变量）
 
 		auto  currentTime = std::chrono::high_resolution_clock::now();
-		float time        = std::chrono::duration<float>(currentTime - startTime).count();        // 经过时间
+		float time        = std::chrono::duration<float>(currentTime - startTime).count() * 0.2f;        // 经过时间
 
 		auto eye = glm::vec3(2.0f, 2.0f, 2.0f);        // 相机位置
 
-		UniformBufferObject ubo{};
 		ubo.model = rotate(glm::mat4(1.0f), time * glm::radians(90.0f), glm::vec3(0.0f, 0.0f, 1.0f));                                                                  // 模型（绕 Z 旋转)
 		ubo.view  = lookAt(eye, glm::vec3(0.0f, 0.0f, 0.0f), glm::vec3(0.0f, 0.0f, 1.0f));                                                                             // 视图（相机位置，看向位置，相机上方）
 		ubo.proj  = glm::perspective(glm::radians(45.0f), static_cast<float>(swapChainExtent.width) / static_cast<float>(swapChainExtent.height), 0.1f, 10.0f);        // 投影（fov，宽高比，近平面，远平面）
@@ -1813,11 +1814,9 @@ class VulkanRaytracingApplication
 		// 仿射变换（3x4）
 		vk::TransformMatrixKHR tm{};
 		auto                  &M = model;
-		tm.matrix                = std::array<std::array<float, 4>, 3>{{
-            std::array<float, 4>{M[0][0], M[1][0], M[2][0], M[3][0]},
-            std::array<float, 4>{M[0][1], M[1][1], M[2][1], M[3][1]},
-            std::array<float, 4>{M[0][2], M[1][2], M[2][2], M[3][2]},
-        }};
+		tm.matrix                = std::array<std::array<float, 4>, 3>{{std::array<float, 4>{M[0][0], M[1][0], M[2][0], M[3][0]},
+		                                                                std::array<float, 4>{M[0][1], M[1][1], M[2][1], M[3][1]},
+		                                                                std::array<float, 4>{M[0][2], M[1][2], M[2][2], M[3][2]}}};
 
 		// 更新实例（CPU）
 		for (auto &instance : instances)
@@ -1872,7 +1871,7 @@ class VulkanRaytracingApplication
 		// 构建范围
 		vk::AccelerationStructureBuildRangeInfoKHR tlasRangeInfo{.primitiveCount = primitiveCount, .primitiveOffset = 0, .firstVertex = 0, .transformOffset = 0};        // 实例数量，偏移(实例)，偏移(顶点)，偏移(变换矩阵)
 
-		// 全局内存屏障
+		// 全局内存屏障（更新前）
 		auto cmd = beginSingleTimeCommands();
 
 		vk::MemoryBarrier preBarrier{
@@ -1884,6 +1883,19 @@ class VulkanRaytracingApplication
 		    vk::PipelineStageFlagBits::eAccelerationStructureBuildKHR,
 		    {}, preBarrier, {}, {}        // 依赖标志，全局内存屏障，缓冲区内存屏障，图像内存屏障
 		);
+
+		// 更新 TLAS
+		cmd->buildAccelerationStructuresKHR({tlasBuildGeometryInfo}, {&tlasRangeInfo});
+
+		// 全局内存屏障（更新后）
+		vk::MemoryBarrier postBarrier{
+		    .srcAccessMask = vk::AccessFlagBits::eAccelerationStructureWriteKHR,
+		    .dstAccessMask = vk::AccessFlagBits::eAccelerationStructureReadKHR | vk::AccessFlagBits::eShaderRead};
+
+		cmd->pipelineBarrier(
+		    vk::PipelineStageFlagBits::eAccelerationStructureBuildKHR,
+		    vk::PipelineStageFlagBits::eAccelerationStructureBuildKHR | vk::PipelineStageFlagBits::eFragmentShader,
+		    {}, postBarrier, {}, {});
 
 		endSingleTimeCommands(*cmd);
 	}
@@ -1900,7 +1912,7 @@ class VulkanRaytracingApplication
 		}
 
 		// 向交换链请求图像
-		auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemphores[frameIndex], nullptr);        // 等待时间，图像可用(信号量)，图像可用(栅栏)
+		auto [result, imageIndex] = swapChain.acquireNextImage(UINT64_MAX, *presentCompleteSemaphores[frameIndex], nullptr);        // 等待时间，图像可用(信号量)，图像可用(栅栏)
 		if (result == vk::Result::eErrorOutOfDateKHR)
 		{
 			recreateSwapChain();
@@ -1927,12 +1939,12 @@ class VulkanRaytracingApplication
 		// 提交命令缓冲
 		const vk::SubmitInfo submitInfo{
 		    .waitSemaphoreCount   = 1,
-		    .pWaitSemaphores      = &*presentCompleteSemphores[frameIndex],        // 等待信号量（提交命令执行前，该信号量必须被触发）（图像可用）
-		    .pWaitDstStageMask    = &waitDestinationStageMask,                     // 等待阶段（等待信号量触发后，才能执行的管线阶段）（该阶段之前可以正常执行）
+		    .pWaitSemaphores      = &*presentCompleteSemaphores[frameIndex],        // 等待信号量（提交命令执行前，该信号量必须被触发）（图像可用）
+		    .pWaitDstStageMask    = &waitDestinationStageMask,                      // 等待阶段（等待信号量触发后，才能执行的管线阶段）（该阶段之前可以正常执行）
 		    .commandBufferCount   = 1,
 		    .pCommandBuffers      = &*commandBuffers[frameIndex],        // 命令缓冲
 		    .signalSemaphoreCount = 1,
-		    .pSignalSemaphores    = &*renderFinishedSemphores[imageIndex]        // 触发信号量（图像渲染完成）
+		    .pSignalSemaphores    = &*renderFinishedSemaphores[imageIndex]        // 触发信号量（图像渲染完成）
 		};
 
 		graphicsQueue.submit(submitInfo, *inFlightFences[frameIndex]);        // 提交命令缓冲（提交信息，栅栏(提交命令执行后，该栅栏被触发)）
@@ -1940,7 +1952,7 @@ class VulkanRaytracingApplication
 		// 请求显示
 		const vk::PresentInfoKHR presentInfoKHR{
 		    .waitSemaphoreCount = 1,
-		    .pWaitSemaphores    = &*renderFinishedSemphores[imageIndex],        // 等待信号量（显示前，该信号量必须被触发）(渲染完成）
+		    .pWaitSemaphores    = &*renderFinishedSemaphores[imageIndex],        // 等待信号量（显示前，该信号量必须被触发）(渲染完成）
 		    .swapchainCount     = 1,
 		    .pSwapchains        = &*swapChain,
 		    .pImageIndices      = &imageIndex        // 图像索引（交换链中）
@@ -1955,7 +1967,7 @@ class VulkanRaytracingApplication
 		}
 		else
 		{
-			assert(result != vk::Result::eSuccess);
+			assert(result == vk::Result::eSuccess);
 		}
 
 		frameIndex = (frameIndex + 1) % MAX_FRAMES_IN_FLIGHT;        // 更新帧索引

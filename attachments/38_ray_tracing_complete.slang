@@ -38,7 +38,7 @@ struct VSOutput {
     float2 fragTexCoord;
     float3 fragNormal;
     float3 worldPos;
-}
+};
 
 [shader("vertex")]
 VSOutput vertMain(VSInput input) {
@@ -132,7 +132,7 @@ void apply_reflection(float3 P, float3 N, inout float4 baseColor)
 
         float2 uv = intersection_uv(instanceID, primIndex, rq.CommittedTriangleBarycentrics());
         uint materialID = instanceLUTBuffer[NonUniformResourceIndex(instanceID)].materialID;
-        float4 intersectionColor = textures[NonUniformResourceIndex(instanceID)].SampleLevel(textureSampler, uv, 0);
+        float4 intersectionColor = textures[NonUniformResourceIndex(materialID)].SampleLevel(textureSampler, uv, 0);
         baseColor.rgb = lerp(baseColor.rgb, intersectionColor.rgb, 0.7);
     }
 }
@@ -163,11 +163,10 @@ bool in_shadow(float3 P)
         {
             sq.CommitNonOpaqueTriangleHit();
         }
-
-        bool hit = (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT);
-
-        return hit;
     }
+
+    bool hit = (sq.CommittedStatus() == COMMITTED_TRIANGLE_HIT);
+    return hit;
 }
 
 [shader("fragment")]
